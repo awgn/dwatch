@@ -144,13 +144,13 @@ in_range(std::string::size_type i, const std::vector<range_type> &xs)
 }
 
 
-inline std::vector<uint64_t>
+inline std::vector<int64_t>
 get_mutables(const char *str, const std::vector<range_type> &xs)
 {
-    std::vector<uint64_t> ret;
+    std::vector<int64_t> ret;
     for(const range_type &x : xs)
     {    
-        ret.push_back(stoi(std::string(str + x.first, str + x.second)));
+        ret.push_back(stoll(std::string(str + x.first, str + x.second)));
     }
     return ret;
 }                 
@@ -187,7 +187,7 @@ hash_line(const char *s, const std::vector<range_type> &xs)
 
 void
 stream_line(std::ostream &out, const std::vector<std::string> &i, 
-            const std::vector<uint64_t> &m, const std::vector<uint64_t> &d, std::vector<range_type> &xs)
+            const std::vector<int64_t> &m, const std::vector<int64_t> &d, std::vector<range_type> &xs)
 {
     auto it = i.cbegin(), it_e = i.cend();
     auto mt = m.cbegin(), mt_e = m.cend();
@@ -229,7 +229,7 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
 void 
 show_line(size_t n, const char *line)
 {
-    static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<range_type>, std::vector<uint64_t> >> dmap;
+    static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<range_type>, std::vector<int64_t> >> dmap;
 
     auto ranges = get_ranges(line);
     auto h      = hash_line(line, ranges);
@@ -253,13 +253,13 @@ show_line(size_t n, const char *line)
     }
     else 
     {
-        std::vector<uint64_t> diff(values.size());
+        std::vector<int64_t> diff(values.size());
         std::transform(values.begin(), values.end(),
-                       std::get<2>(it->second).begin(), diff.begin(), std::minus<uint64_t>());
+                       std::get<2>(it->second).begin(), diff.begin(), std::minus<int64_t>());
 
         // dump datafile if open...
         if (g_data.is_open())
-            std::for_each(diff.begin(), diff.end(), [&](uint64_t d) {
+            std::for_each(diff.begin(), diff.end(), [&](int64_t d) {
                 g_data << static_cast<double>(d)/g_interval.count() << '\t';
             });
 
