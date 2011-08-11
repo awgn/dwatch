@@ -1,3 +1,22 @@
+ /*
+ *  Copyright (c) 2011 Bonelli Nicola <bonelli@antifork.org>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ *
+ */
+
 #include <sys/types.h>
 #include <sys/wait.h>
 
@@ -106,7 +125,7 @@ complement(const std::vector<range_type> &xs, size_t size)
     is.push_back(std::make_pair(first, size));
 
     is.erase(std::remove_if(is.begin(), is.end(), 
-                            [](const range_type &r) { return r.first == r.second; }), is.end());
+             [](const range_type &r) { return r.first == r.second; }), is.end());
     return is;
 }
 
@@ -167,7 +186,8 @@ hash_line(const char *s, const std::vector<range_type> &xs)
 
 
 void
-stream_line(std::ostream &out, const std::vector<std::string> &i, const std::vector<uint64_t> &m, const std::vector<uint64_t> &d, std::vector<range_type> &xs)
+stream_line(std::ostream &out, const std::vector<std::string> &i, 
+            const std::vector<uint64_t> &m, const std::vector<uint64_t> &d, std::vector<range_type> &xs)
 {
     auto it = i.cbegin(), it_e = i.cend();
     auto mt = m.cbegin(), mt_e = m.cend();
@@ -312,7 +332,6 @@ main_loop(const char *command)
                 }
             }
         }
-
         std::this_thread::sleep_for(g_interval);
     }
 
@@ -369,6 +388,4 @@ main(int argc, char *argv[])
 
     return main_loop(*opt);
 }
-
-
 
