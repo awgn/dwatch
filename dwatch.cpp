@@ -4,14 +4,24 @@
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 #include <snippet>
 
-const char * CLEAR = "\033[2J\033[1;1H";
+const char * const CLEAR = "\033[2J\033[1;1H";
+const char * const BOLD  = "\E[1m";
+const char * const RESET = "\E[0m";
+const char * const BLUE  = "\E[1;34m";
+const char * const RED   = "\E[31m";
 
 extern const char *__progname;
 
 typedef std::pair<size_t, size_t>  range_type;
+
+/* global options */
+
+int  g_seconds = std::numeric_limits<int>::max();
+bool g_color = false;
 
 std::vector<range_type>
 get_ranges(const char *str)
@@ -72,49 +82,40 @@ get_ranges(const char *str)
 
 
 std::vector<range_type>
-complement(const std::vector<range_type> &iv, size_t size)
+complement(const std::vector<range_type> &xs, size_t size)
 {
-    std::vector<range_type> ic;
+    std::vector<range_type> is;
     size_t first = 0;
 
-    for(const range_type &ip : iv)
+    for(const range_type &ip : xs)
     {
-        ic.push_back(std::make_pair(first, ip.first));
+        is.push_back(std::make_pair(first, ip.first));
         first = ip.second;
     }
-    ic.push_back(std::make_pair(first, size));
+    is.push_back(std::make_pair(first, size));
 
-    ic.erase(std::remove_if(ic.begin(), ic.end(), 
-                            [](const range_type &r) { return r.first == r.second; }), ic.end());
-    return ic;
+    is.erase(std::remove_if(is.begin(), is.end(), 
+                  [](const range_type &r) { return r.first == r.second; }), is.end());
+    return is;
 }
 
 
 inline bool 
-in_range(std::string::size_type i, const std::vector<range_type> &points)
+in_range(std::string::size_type i, const std::vector<range_type> &xs)
 {
-    auto e = points.end();
-
-    std::function<bool(std::vector<range_type>::const_iterator)> 
-    predicate = [&](std::vector<range_type>::const_iterator r)
-       {
-           if (r == e || i < r->first)
-               return false;
-           else
-               return (i >= r->first && i < r->second) ? true : predicate(r+1); 
-       };
-
-    return predicate( points.cbegin() );
-
-    // return std::accumulate(points.begin(), points.end(), false, 
-    //                        [&](bool acc, const range_type &point) {
-    //                        return acc ||  (i >= point.first && i < point.second);
-    //                        }); 
+    for(const range_type &r : xs)
+    {
+        if (i < r.first)
+            return false;
+        if (i >= r.first && i < r.second)
+            return true;
+    }
+    return false;
 }
 
 
 inline std::vector<uint64_t>
-get_mutable(const char *str, const std::vector<range_type> &mp)
+get_mutables(const char *str, const std::vector<range_type> &mp)
 {
     std::vector<uint64_t> ret;
     for(const range_type &p : mp)
@@ -126,12 +127,10 @@ get_mutable(const char *str, const std::vector<range_type> &mp)
 
 
 inline std::vector<std::string>
-get_immutable(const char *str, const std::vector<range_type> &mp)
+get_immutables(const char *str, const std::vector<range_type> &mp)
 {
     std::vector<std::string> ret;
-    auto ip = complement(mp, strlen(str));
-
-    for(const range_type &p: ip)
+    for(const range_type &p: complement(mp, strlen(str)))
     {
         ret.push_back(std::string(str + p.first, str + p.second));
     };
@@ -146,47 +145,74 @@ hash_line(const char *s, const std::vector<range_type> &xs)
     std::string str;
     str.reserve(s_end-s);
     
-    std::for_each(s, s_end, [&](char c) { if (in_range(c, xs)) str.push_back(c); }); 
+    size_t index = 0;
+    std::for_each(s, s_end, [&](char c) { 
+                  if (!in_range(index++, xs)) 
+                      str.push_back(c); 
+                  }); 
     
     return std::hash<std::string>()(str);
 }
 
 
 void
-merge_and_stream(std::ostream &out, const std::vector<std::string> &i, const std::vector<uint64_t> &m, std::vector<range_type> &point)
+stream_line(std::ostream &out, const std::vector<std::string> &i, const std::vector<uint64_t> &m, const std::vector<uint64_t> &d, std::vector<range_type> &xs)
 {
-    bool m_first = (!point.empty() && point[0].first == 0);
+    bool m_first = (!xs.empty() && xs[0].first == 0);
 
     auto it = i.begin(), it_e = i.end();
     auto mt = m.begin(), mt_e = m.end();
+    auto dt = d.begin(), dt_e = d.end();
 
     for(; (it != it_e) || (mt != mt_e);)
     {
         if (m_first) 
         {
-            if ( mt != mt_e ) out << *mt++;
+            if ( mt != mt_e ) out << *mt++ << "[" << (g_color ? BOLD : "") << *dt++ << "/sec" << RESET << "]";
             if ( it != it_e ) out << *it++;
         }
         else 
         {
             if ( it != it_e ) out << *it++;
-            if ( mt != mt_e ) out << *mt++;
+            if ( mt != mt_e ) out << *mt++ << "[" << (g_color ? BOLD : "") << *dt++ << "/sec" << RESET << "]";
         }
     }
 }   
 
 
-void show_line(const char *line)
+void show_line(size_t n, const char *line)
 {
-    auto ranges = get_ranges(line);
+    static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<range_type>, std::vector<uint64_t> >> dmap;
 
-    std::cout << ranges << std::endl;
+    auto ranges = get_ranges(line);
+    auto h      = hash_line(line, ranges);
+    auto values = get_mutables(line, ranges);
+    auto it     = dmap.find(n);
+
+    if (it == dmap.end() || 
+        ranges.empty() ||
+        std::get<0>(it->second) != h || 
+        std::get<1>(it->second).size() != ranges.size() )
+    {
+        std::cout << line;
+    }
+    else 
+    {
+        std::vector<uint64_t> diff(values.size());
+
+        std::transform(values.begin(), values.end(),
+                       std::get<2>(it->second).begin(), diff.begin(), std::minus<uint64_t>());
+
+        stream_line(std::cout, get_immutables(line, ranges), values, diff, ranges);
+    }
+
+    dmap[n] = std::make_tuple(h, ranges, values); 
 }
 
 
 int main_loop(const char *command)
 {
-    for(int n=0;;++n)
+    for(int n=0; n < g_seconds; ++n)
     {
         std::cout << CLEAR << "Every " << n << "s: " << command << std::endl;
 
@@ -216,9 +242,10 @@ int main_loop(const char *command)
 
             /* dump output */
 
+            size_t n = 0;
             while( (read = ::getline(&line, &len, fp)) != -1 )
             {   
-                show_line(line); 
+                show_line(n++,line); 
             }
 
             ::free(line);
@@ -240,67 +267,49 @@ int main_loop(const char *command)
     return 0;
 }                   
 
+void usage()
+{
+    std::cout << "usage: " << __progname << " [-h] [-c|--color] [-n sec] command [args...]" << std::endl;
+}
+
 
 int
 main(int argc, char *argv[])
 {
-    const char *str_test  = "9 abc:10 11 12,sdfdsf:13 ";
-    const char *str_test2 = "1 abc:10 13 12,sdfdsf:110 ";
+    if (argc < 2) {
+        usage();
+        return 0;
+    }
 
-    auto p = get_ranges(str_test); 
-    auto q = complement(p, strlen(str_test));
+    char **opt = &argv[1];
 
-    std::cout << p << std::endl;
-    std::cout << q << std::endl;
-    std::cout << complement(q, strlen(str_test)) << std::endl;
+    // parse command line option...
+    //
 
+    for ( ; opt != argv + argc ; opt++)
+    {
+        if (!std::strcmp(*opt, "-h") || !std::strcmp(*opt, "--help"))
+        {
+            usage(); return 0;
+        }
+        if (!std::strcmp(*opt, "-n"))
+        {
+            g_seconds = atoi(*++opt);
+            continue;
+        }
+        if (!std::strcmp(*opt, "-c") ||
+            !std::strcmp(*opt, "--color"))
+        {
+            g_color = true;
+            continue;
+        }
 
-    std::cout << more::streamer::sep(".") << get_mutable(str_test, p) << std::endl;
-    std::cout << get_immutable(str_test, p)  << std::endl;
+        break;
+        std::cout << "option: " << *opt << std::endl;
+    }
 
-    std::cout << str_test << std::endl;    
-    merge_and_stream(std::cout, get_immutable(str_test,p), get_mutable(str_test,p), p);
-    std::cout << std::endl;
-    
-    std::cout << std::hex << hash_line(str_test,  p) << std::endl;
-    std::cout << std::hex << hash_line(str_test2, get_ranges(str_test2)) << std::endl;
-
-    return 0;
+    return main_loop(*opt);
 }
-
-
-void usage()
-{
-    std::cout << "usage: " << __progname << " [-h] command [args...]" << std::endl;
-}
-
-
-// int
-// main(int argc, char *argv[])
-// {
-//     if (argc < 2) {
-//         usage();
-//         return 0;
-//     }
-// 
-//     char **opt = &argv[1];
-// 
-//     // parse command line option...
-//     //
-// 
-//     for ( ; opt != argv + argc ; opt++)
-//     {
-//         if (!std::strcmp(*opt, "-h") || !std::strcmp(*opt, "--help"))
-//         {
-//             usage(); return 0;
-//         }
-// 
-//         break;
-//         std::cout << "option: " << *opt << std::endl;
-//     }
-// 
-//     return main_loop(*opt);
-// }
 
 
 
