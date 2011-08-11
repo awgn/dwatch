@@ -33,6 +33,7 @@ std::chrono::seconds g_interval(1);
 std::string    g_datafile;
 std::ofstream  g_data;
 
+
 std::vector<range_type>
 get_ranges(const char *str)
 {
@@ -158,7 +159,7 @@ hash_line(const char *s, const std::vector<range_type> &xs)
     size_t index = 0;
     std::for_each(s, s_end, [&](char c) { 
                   if (!in_range(index++, xs)) 
-                      str.push_back(isdigit(c) ? 0 : c); 
+                      str.push_back(isdigit(c) ? '_' : c); 
                   }); 
     str.erase(str.size()-1,1);
     return std::make_pair(std::hash<std::string>()(str),str);
@@ -216,7 +217,7 @@ show_line(size_t n, const char *line)
 #ifdef DEBUG
         std::cout << "+"   << c0 << c1 << c2 << c3 << 
                      " h:" << std::hex << h.first << std::dec << 
-                     "'"   << h.second << "' " << ranges << " -> ";
+                     "'"   << h.second << "' -> ";
 #endif
 
         std::cout << line;
@@ -236,7 +237,7 @@ show_line(size_t n, const char *line)
 #ifdef DEBUG
         std::cout << "+"   << c0 << c1 << c2 << c3 << 
                      " h:" << std::hex << h.first << std::dec << 
-                     "'"   << h.second << "' " << ranges << " -> ";
+                     "'"   << h.second << "' -> ";
 #endif
         // dump the line...
         stream_line(std::cout, get_immutables(line, ranges), values, diff, ranges);
@@ -258,7 +259,9 @@ main_loop(const char *command)
 
     for(int n=0; n < g_seconds; ++n)
     {
-        std::cout << CLEAR << "Every " << g_interval.count() << "s: " << command << std::endl;
+        std::cout << CLEAR << "Every " << g_interval.count() << "s: '" << command << "' "; 
+        if (g_data.is_open())
+            std::cout << "\tdata:" << g_datafile << std::endl;
 
         int status, fds[2];
         if (::pipe(fds) < 0)
@@ -274,8 +277,8 @@ main_loop(const char *command)
             ::close(1);
             ::dup2(fds[1], 1);
 
-            execl("/bin/sh", "sh", "-c", command, NULL);
-            _exit(127);
+            ::execl("/bin/sh", "sh", "-c", command, NULL);
+            ::_exit(127);
         }
         else { /* parent */
 
@@ -329,7 +332,7 @@ main(int argc, char *argv[])
         usage();
         return 0;
     }
-
+    
     char **opt = &argv[1];
 
     // parse command line option...
@@ -361,7 +364,6 @@ main(int argc, char *argv[])
             g_datafile.assign(*++opt);
             continue;
         }
-
         break;
     }
 
