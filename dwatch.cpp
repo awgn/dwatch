@@ -2,11 +2,15 @@
 #include <sys/wait.h>
 
 #include <iostream>
-#include <algorithm>
+#include <fstream>
 #include <chrono>
 #include <limits>
-
-#include <snippet>
+#include <cstring>
+#include <string>
+#include <unordered_map>
+#include <algorithm>
+#include <stdexcept>
+#include <thread>
 
 const char * const CLEAR = "\033[2J\033[1;1H";
 const char * const BOLD  = "\E[1m";
@@ -18,10 +22,16 @@ extern const char *__progname;
 
 typedef std::pair<size_t, size_t>  range_type;
 
-/* global options */
+//// global options /////
 
-int  g_seconds = std::numeric_limits<int>::max();
+int g_seconds = std::numeric_limits<int>::max();
+
 bool g_color = false;
+
+std::chrono::seconds g_interval(1);
+
+std::string    g_datafile;
+std::ofstream  g_data;
 
 std::vector<range_type>
 get_ranges(const char *str)
@@ -37,7 +47,7 @@ get_ranges(const char *str)
     for(const char *c = str; *c != '\0'; c++)
     {
         auto is_sep = [](char c) { 
-            return isspace(c) || c == ',' || c == ':' || c == ';'; 
+            return isspace(c) || c == ',' || c == ':' || c == ';' || c == '(' || c == ')'; 
         };
 
         switch(local_state)
@@ -95,7 +105,7 @@ complement(const std::vector<range_type> &xs, size_t size)
     is.push_back(std::make_pair(first, size));
 
     is.erase(std::remove_if(is.begin(), is.end(), 
-                  [](const range_type &r) { return r.first == r.second; }), is.end());
+                            [](const range_type &r) { return r.first == r.second; }), is.end());
     return is;
 }
 
@@ -138,49 +148,56 @@ get_immutables(const char *str, const std::vector<range_type> &mp)
 }                 
 
 
-uint32_t
+std::pair<uint32_t, std::string>
 hash_line(const char *s, const std::vector<range_type> &xs)
 {
     const char *s_end = s + strlen(s);
     std::string str;
     str.reserve(s_end-s);
-    
+
     size_t index = 0;
     std::for_each(s, s_end, [&](char c) { 
                   if (!in_range(index++, xs)) 
-                      str.push_back(c); 
+                      str.push_back(isdigit(c) ? 0 : c); 
                   }); 
-    
-    return std::hash<std::string>()(str);
+    str.erase(str.size()-1,1);
+    return std::make_pair(std::hash<std::string>()(str),str);
 }
 
 
 void
 stream_line(std::ostream &out, const std::vector<std::string> &i, const std::vector<uint64_t> &m, const std::vector<uint64_t> &d, std::vector<range_type> &xs)
 {
-    bool m_first = (!xs.empty() && xs[0].first == 0);
+    auto it = i.cbegin(), it_e = i.cend();
+    auto mt = m.cbegin(), mt_e = m.cend();
+    auto dt = d.cbegin(), dt_e = d.cend();
 
-    auto it = i.begin(), it_e = i.end();
-    auto mt = m.begin(), mt_e = m.end();
-    auto dt = d.begin(), dt_e = d.end();
+    auto print_rate = [&]() {
+        auto rate = static_cast<double>(*dt)/g_interval.count();
+        if (rate != 0.0)
+            out << "[" << (g_color ? BOLD : "") << rate << "/sec" << RESET << "]"; 
+        dt++;
+    };
 
-    for(; (it != it_e) || (mt != mt_e);)
+    if (!xs.empty() && xs[0].first == 0) 
+        for(; (it != it_e) || (mt != mt_e);)
     {
-        if (m_first) 
-        {
-            if ( mt != mt_e ) out << *mt++ << "[" << (g_color ? BOLD : "") << *dt++ << "/sec" << RESET << "]";
-            if ( it != it_e ) out << *it++;
-        }
-        else 
-        {
-            if ( it != it_e ) out << *it++;
-            if ( mt != mt_e ) out << *mt++ << "[" << (g_color ? BOLD : "") << *dt++ << "/sec" << RESET << "]";
-        }
+        if ( mt != mt_e ) out << (g_color ? BLUE : "") << *mt++ << RESET;
+        if ( dt != dt_e ) print_rate();
+        if ( it != it_e ) out << *it++;
+    }
+    else 
+        for(; (it != it_e) || (mt != mt_e);)
+    {
+        if ( it != it_e ) out << *it++;
+        if ( mt != mt_e ) out << (g_color ? BLUE : "") << *mt++ << RESET;
+        if ( dt != dt_e ) print_rate();
     }
 }   
 
 
-void show_line(size_t n, const char *line)
+void 
+show_line(size_t n, const char *line)
 {
     static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<range_type>, std::vector<uint64_t> >> dmap;
 
@@ -189,32 +206,59 @@ void show_line(size_t n, const char *line)
     auto values = get_mutables(line, ranges);
     auto it     = dmap.find(n);
 
-    if (it == dmap.end() || 
-        ranges.empty() ||
-        std::get<0>(it->second) != h || 
-        std::get<1>(it->second).size() != ranges.size() )
+    bool c0 = (it == dmap.end());
+    bool c1 = c0 || (ranges.empty());
+    bool c2 = c1 || std::get<0>(it->second) != h.first;
+    bool c3 = c2 || std::get<1>(it->second).size() != ranges.size();
+
+    if (c3) 
     {
+#ifdef DEBUG
+        std::cout << "+"   << c0 << c1 << c2 << c3 << 
+                     " h:" << std::hex << h.first << std::dec << 
+                     "'"   << h.second << "' " << ranges << " -> ";
+#endif
+
         std::cout << line;
     }
     else 
     {
         std::vector<uint64_t> diff(values.size());
-
         std::transform(values.begin(), values.end(),
                        std::get<2>(it->second).begin(), diff.begin(), std::minus<uint64_t>());
 
+        // dump datafile if open...
+        if (g_data.is_open())
+            std::for_each(diff.begin(), diff.end(), [&](uint64_t d) {
+                g_data << static_cast<double>(d)/g_interval.count() << '\t';
+            });
+
+#ifdef DEBUG
+        std::cout << "+"   << c0 << c1 << c2 << c3 << 
+                     " h:" << std::hex << h.first << std::dec << 
+                     "'"   << h.second << "' " << ranges << " -> ";
+#endif
+        // dump the line...
         stream_line(std::cout, get_immutables(line, ranges), values, diff, ranges);
     }
 
-    dmap[n] = std::make_tuple(h, ranges, values); 
+    dmap[n] = std::make_tuple(h.first, ranges, values); 
 }
 
 
-int main_loop(const char *command)
+int 
+main_loop(const char *command)
 {
+    // open data file...
+    if (!g_datafile.empty()) {
+        g_data.open(g_datafile.c_str());
+        if (!g_data.is_open())
+            throw std::runtime_error("ofstream::open");
+    }
+
     for(int n=0; n < g_seconds; ++n)
     {
-        std::cout << CLEAR << "Every " << n << "s: " << command << std::endl;
+        std::cout << CLEAR << "Every " << g_interval.count() << "s: " << command << std::endl;
 
         int status, fds[2];
         if (::pipe(fds) < 0)
@@ -240,13 +284,18 @@ int main_loop(const char *command)
             FILE * fp = ::fdopen(fds[0], "r");
             char *line; size_t len = 0; ssize_t read;
 
-            /* dump output */
+            // dump output 
+            if (g_data.is_open())
+                g_data << n << '\t';
 
-            size_t n = 0;
+            size_t i = 0;
             while( (read = ::getline(&line, &len, fp)) != -1 )
             {   
-                show_line(n++,line); 
+                show_line(i++,line); 
             }
+
+            if (g_data.is_open())
+                g_data << std::endl;
 
             ::free(line);
             ::fclose(fp);
@@ -261,7 +310,7 @@ int main_loop(const char *command)
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::seconds(1));
+        std::this_thread::sleep_for(g_interval);
     }
 
     return 0;
@@ -269,7 +318,7 @@ int main_loop(const char *command)
 
 void usage()
 {
-    std::cout << "usage: " << __progname << " [-h] [-c|--color] [-n sec] command [args...]" << std::endl;
+    std::cout << "usage: " << __progname << " [-h] [-c|--color] [-i|--interval sec] [-d|--data data.out ] [-n sec] command [args...]" << std::endl;
 }
 
 
@@ -285,7 +334,7 @@ main(int argc, char *argv[])
 
     // parse command line option...
     //
-
+    
     for ( ; opt != argv + argc ; opt++)
     {
         if (!std::strcmp(*opt, "-h") || !std::strcmp(*opt, "--help"))
@@ -297,15 +346,23 @@ main(int argc, char *argv[])
             g_seconds = atoi(*++opt);
             continue;
         }
-        if (!std::strcmp(*opt, "-c") ||
-            !std::strcmp(*opt, "--color"))
+        if (!std::strcmp(*opt, "-c") || !std::strcmp(*opt, "--color"))
         {
             g_color = true;
             continue;
         }
+        if (!std::strcmp(*opt, "-i") || !std::strcmp(*opt, "--interval"))
+        {
+            g_interval = std::chrono::seconds(atoi(*++opt));
+            continue;
+        }
+        if (!std::strcmp(*opt, "-d") || !std::strcmp(*opt, "--data"))
+        {
+            g_datafile.assign(*++opt);
+            continue;
+        }
 
         break;
-        std::cout << "option: " << *opt << std::endl;
     }
 
     return main_loop(*opt);
