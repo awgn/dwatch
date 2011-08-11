@@ -1,4 +1,4 @@
- /*
+/*
  *  Copyright (c) 2011 Bonelli Nicola <bonelli@antifork.org>
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -117,10 +117,10 @@ complement(const std::vector<range_type> &xs, size_t size)
     std::vector<range_type> is;
     size_t first = 0;
 
-    for(const range_type &ip : xs)
+    for(const range_type &x : xs)
     {
-        is.push_back(std::make_pair(first, ip.first));
-        first = ip.second;
+        is.push_back(std::make_pair(first, x.first));
+        first = x.second;
     }
     is.push_back(std::make_pair(first, size));
 
@@ -133,11 +133,11 @@ complement(const std::vector<range_type> &xs, size_t size)
 inline bool 
 in_range(std::string::size_type i, const std::vector<range_type> &xs)
 {
-    for(const range_type &r : xs)
+    for(const range_type &x : xs)
     {
-        if (i < r.first)
+        if (i < x.first)
             return false;
-        if (i >= r.first && i < r.second)
+        if (i >= x.first && i < x.second)
             return true;
     }
     return false;
@@ -145,24 +145,24 @@ in_range(std::string::size_type i, const std::vector<range_type> &xs)
 
 
 inline std::vector<uint64_t>
-get_mutables(const char *str, const std::vector<range_type> &mp)
+get_mutables(const char *str, const std::vector<range_type> &xs)
 {
     std::vector<uint64_t> ret;
-    for(const range_type &p : mp)
+    for(const range_type &x : xs)
     {    
-        ret.push_back(stoi(std::string(str + p.first, str + p.second)));
+        ret.push_back(stoi(std::string(str + x.first, str + x.second)));
     }
     return ret;
 }                 
 
 
 inline std::vector<std::string>
-get_immutables(const char *str, const std::vector<range_type> &mp)
+get_immutables(const char *str, const std::vector<range_type> &xs)
 {
     std::vector<std::string> ret;
-    for(const range_type &p: complement(mp, strlen(str)))
+    for(const range_type &x : complement(xs, strlen(str)))
     {
-        ret.push_back(std::string(str + p.first, str + p.second));
+        ret.push_back(std::string(str + x.first, str + x.second));
     };
     return ret;
 }                 
@@ -195,8 +195,17 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
 
     auto print_rate = [&]() {
         auto rate = static_cast<double>(*dt)/g_interval.count();
-        if (rate != 0.0)
-            out << "[" << (g_color ? BOLD : "") << rate << "/sec" << RESET << "]"; 
+        if (rate != 0.0) {
+            if (rate > 1000000000)
+                out << "[" << (g_color ? BOLD : "") << rate/1000000000 << "G/sec" << RESET << "]";
+            else if (rate > 1000000)
+                out << "[" << (g_color ? BOLD : "") << rate/1000000 << "M/sec" << RESET << "]";
+            else if (rate > 1000)
+                out << "[" << (g_color ? BOLD : "") << rate/1000 << "K/sec" << RESET << "]";
+            else 
+                out << "[" << (g_color ? BOLD : "") << rate << "/sec" << RESET << "]";
+        }
+
         dt++;
     };
 
@@ -281,7 +290,9 @@ main_loop(const char *command)
     {
         std::cout << CLEAR << "Every " << g_interval.count() << "s: '" << command << "' "; 
         if (g_data.is_open())
-            std::cout << "\tdata:" << g_datafile << std::endl;
+            std::cout << "\tdata:" << g_datafile;
+
+        std::cout << '\n';
 
         int status, fds[2];
         if (::pipe(fds) < 0)
@@ -340,7 +351,7 @@ main_loop(const char *command)
 
 void usage()
 {
-    std::cout << "usage: " << __progname << " [-h] [-c|--color] [-i|--interval sec] [-d|--data data.out ] [-n sec] command [args...]" << std::endl;
+    std::cout << "usage: " << __progname << " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out ] [-n sec] command [args...]" << std::endl;
 }
 
 
@@ -378,7 +389,7 @@ main(int argc, char *argv[])
             g_interval = std::chrono::seconds(atoi(*++opt));
             continue;
         }
-        if (!std::strcmp(*opt, "-d") || !std::strcmp(*opt, "--data"))
+        if (!std::strcmp(*opt, "-t") || !std::strcmp(*opt, "--trace"))
         {
             g_datafile.assign(*++opt);
             continue;
