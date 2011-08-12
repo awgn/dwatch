@@ -45,6 +45,8 @@ typedef std::pair<size_t, size_t>  range_type;
 
 int g_seconds = std::numeric_limits<int>::max();
 
+std::function<bool(char c)> g_euristic;
+
 bool g_color = false;
 
 std::chrono::seconds g_interval(1);
@@ -52,29 +54,42 @@ std::chrono::seconds g_interval(1);
 std::string    g_datafile;
 std::ofstream  g_data;
 
+template <char ...Ci> struct issep;
+template <char C, char ...Ci>
+struct issep<C,Ci...>
+{
+    static bool good(char c)
+    { return c == C || issep<Ci...>::good(c); }
+};
+template <char C>
+struct issep<C>
+{
+    static bool good(char c)
+    { return c == C; }
+};
+
 
 std::vector<range_type>
 get_ranges(const char *str)
 {
     std::vector<range_type> local_vector;
 
-    enum class state { none, space, digit };
+    enum class state { none, space, sign, digit };
     state local_state = state::space;
 
     range_type local_point;
     std::string::size_type local_index = 0;
 
+    // parse line...
+    //
+
     for(const char *c = str; *c != '\0'; c++)
     {
-        auto is_sep = [](char c) { 
-            return isspace(c) || c == ',' || c == ':' || c == ';' || c == '(' || c == ')'; 
-        };
-
         switch(local_state)
         {
         case state::none:
             {
-                if (is_sep(*c))
+                if (g_euristic(*c))
                     local_state = state::space;
             } break;
         case state::space:
@@ -82,13 +97,29 @@ get_ranges(const char *str)
                 if (isdigit(*c)) {
                     local_state = state::digit;
                     local_point.first = local_index;
-                } else if (!is_sep(*c)) {
+                } else if (*c == '-' || *c == '+') {
+                    local_state = state::sign;
+                    local_point.first = local_index;
+                }
+                else if (!g_euristic(*c)) {
                     local_state = state::none;
                 }    
             } break;        
+        case state::sign:
+            {
+                if (isdigit(*c)) {
+                    local_state = state::digit;
+                } else if (*c == '-' || *c == '+') {
+                    local_state = state::sign;
+                    local_point.first = local_index;
+                }
+                else if (!g_euristic(*c)) {
+                    local_state = state::none;
+                }    
+            } break;
         case state::digit:
             {
-                if (is_sep(*c)) {
+                if (g_euristic(*c)) {
                     local_point.second = local_index;
                     local_vector.push_back(local_point);
                     local_state = state::space;
@@ -177,8 +208,8 @@ hash_line(const char *s, const std::vector<range_type> &xs)
 
     size_t index = 0;
     std::for_each(s, s_end, [&](char c) { 
-                  if (!in_range(index++, xs)) 
-                      str.push_back(isdigit(c) ? '_' : c); 
+                  if (!in_range(index++, xs) && !isdigit(c)) 
+                      str.push_back(c); 
                   }); 
     str.erase(str.size()-1,1);
     return std::make_pair(std::hash<std::string>()(str),str);
@@ -351,12 +382,14 @@ main_loop(const char *command)
 
 void usage()
 {
-    std::cout << "usage: " << __progname << " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out ] [-n sec] command [args...]" << std::endl;
+    std::cout << "usage: " << __progname << 
+        " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out ] [-e|--euristic level] [-n sec] command [args...]" << std::endl;
 }
 
 
 int
 main(int argc, char *argv[])
+try
 {
     if (argc < 2) {
         usage();
@@ -368,7 +401,7 @@ main(int argc, char *argv[])
     // parse command line option...
     //
     
-    for ( ; opt != argv + argc ; opt++)
+    for ( ; opt != (argv + argc) ; opt++)
     {
         if (!std::strcmp(*opt, "-h") || !std::strcmp(*opt, "--help"))
         {
@@ -394,9 +427,37 @@ main(int argc, char *argv[])
             g_datafile.assign(*++opt);
             continue;
         }
+        if (!std::strcmp(*opt, "-e") || !std::strcmp(*opt, "--euristic"))
+        {
+            switch (atoi(*++opt))
+            {
+            case 0:
+                g_euristic = [](char c) 
+                { 
+                    return isspace(c) || issep<',',':',';','(',')'>::good(c); 
+                };
+            break;
+            case 1:
+                g_euristic = [](char c) 
+                { 
+                    return isspace(c) || issep<'.',',',':',';','(',')','{','}','[',']','='>::good(c); 
+                };
+            break;
+            default:
+                throw std::runtime_error("unknown euristic");
+            }
+            continue;
+        }
+        
         break;
     }
 
+    if (opt == (argv + argc))
+        throw std::runtime_error("missing argument");
+    
     return main_loop(*opt);
 }
-
+catch(std::exception &e)
+{
+    std::cerr << __progname << ": " << e.what() << std::endl;
+}
