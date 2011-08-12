@@ -145,19 +145,19 @@ get_ranges(const char *str)
 std::vector<range_type>
 complement(const std::vector<range_type> &xs, size_t size)
 {
-    std::vector<range_type> is;
+    std::vector<range_type> ret;
     size_t first = 0;
 
     for(const range_type &x : xs)
     {
-        is.push_back(std::make_pair(first, x.first));
+        ret.push_back(std::make_pair(first, x.first));
         first = x.second;
     }
-    is.push_back(std::make_pair(first, size));
+    ret.push_back(std::make_pair(first, size));
 
-    is.erase(std::remove_if(is.begin(), is.end(), 
-             [](const range_type &r) { return r.first == r.second; }), is.end());
-    return is;
+    ret.erase(std::remove_if(ret.begin(), ret.end(), 
+             [](const range_type &r) { return r.first == r.second; }), ret.end());
+    return ret;
 }
 
 
@@ -284,7 +284,7 @@ show_line(size_t n, const char *line)
     }
     else 
     {
-        std::vector<int64_t> diff(values.size());
+        decltype(values) diff(values.size());
         std::transform(values.begin(), values.end(),
                        std::get<2>(it->second).begin(), diff.begin(), std::minus<int64_t>());
 
