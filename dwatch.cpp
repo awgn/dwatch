@@ -45,7 +45,7 @@ typedef std::pair<size_t, size_t>  range_type;
 
 int g_seconds = std::numeric_limits<int>::max();
 
-std::function<bool(char c)> g_euristic;
+std::function<bool(char c)> g_euristic; 
 
 bool g_color = false;
 
@@ -455,6 +455,14 @@ try
     if (opt == (argv + argc))
         throw std::runtime_error("missing argument");
     
+    if (!g_euristic)
+    {
+        g_euristic = [](char c) 
+        { 
+            return isspace(c) || issep<',',':',';','(',')'>::good(c); 
+        };
+    }
+
     return main_loop(*opt);
 }
 catch(std::exception &e)
