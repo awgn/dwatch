@@ -22,14 +22,26 @@
 
 #include <iostream>
 #include <fstream>
-#include <chrono>
 #include <limits>
 #include <cstring>
 #include <string>
-#include <unordered_map>
+#include <vector>
+
+#include <tuple>
+#include <chrono>
+#include <functional>
 #include <algorithm>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
+
+extern const char *__progname;
+
+typedef std::pair<size_t, size_t>  range_type;
+
+
+//////////////// global data /////////////////
+
 
 const char * const CLEAR = "\033[2J\033[1;1H";
 const char * const BOLD  = "\E[1m";
@@ -37,37 +49,47 @@ const char * const RESET = "\E[0m";
 const char * const BLUE  = "\E[1;34m";
 const char * const RED   = "\E[31m";
 
-extern const char *__progname;
-
-typedef std::pair<size_t, size_t>  range_type;
-
-//// global options /////
-
 int g_seconds = std::numeric_limits<int>::max();
 
 std::function<bool(char c)> g_euristic; 
 
-bool g_color = false;
 
 std::chrono::seconds g_interval(1);
 
+bool g_color = false;
+
 std::string    g_datafile;
+
 std::ofstream  g_data;
 
-template <char ...Ci> struct issep;
-template <char C, char ...Ci>
-struct issep<C,Ci...>
-{
-    static bool good(char c)
-    { return c == C || issep<Ci...>::good(c); }
-};
-template <char C>
-struct issep<C>
-{
-    static bool good(char c)
-    { return c == C; }
-};
 
+//////////////// defaut euristic /////////////////
+
+
+struct default_euristic
+{
+    default_euristic(const char *sep)
+    : xs(sep)
+    {}
+
+    bool operator()(char c) const
+    {
+        auto issep = [&](char a) 
+        {
+            for(char x : xs)
+            {
+                if (a == x)
+                    return true;
+            }
+            return false;
+        };
+
+        return isspace(c) || issep(c); 
+    }
+
+    std::string xs;
+};
+                       
 
 std::vector<range_type>
 get_ranges(const char *str)
@@ -236,7 +258,6 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
             else 
                 out << "[" << (g_color ? BOLD : "") << rate << "/sec" << RESET << "]";
         }
-
         dt++;
     };
 
@@ -380,6 +401,7 @@ main_loop(const char *command)
     return 0;
 }                   
 
+
 void usage()
 {
     std::cout << "usage: " << __progname << 
@@ -431,17 +453,11 @@ try
         {
             switch (atoi(*++opt))
             {
-            case 0:
-                g_euristic = [](char c) 
-                { 
-                    return isspace(c) || issep<',',':',';','(',')'>::good(c); 
-                };
-            break;
+            case 0: 
+                    g_euristic = default_euristic(",:;()"); 
+                    break;
             case 1:
-                g_euristic = [](char c) 
-                { 
-                    return isspace(c) || issep<'.',',',':',';','(',')','{','}','[',']','='>::good(c); 
-                };
+                    g_euristic = default_euristic(".,:;(){}[]="); 
             break;
             default:
                 throw std::runtime_error("unknown euristic");
@@ -456,12 +472,7 @@ try
         throw std::runtime_error("missing argument");
     
     if (!g_euristic)
-    {
-        g_euristic = [](char c) 
-        { 
-            return isspace(c) || issep<',',':',';','(',')'>::good(c); 
-        };
-    }
+        g_euristic = default_euristic(",:;()"); 
 
     return main_loop(*opt);
 }
