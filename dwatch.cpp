@@ -151,6 +151,9 @@ void signal_handler(int sig)
     case SIGTSTP:
          g_diffmode.store(g_diffmode.load() ? false : true);
          break;
+    case SIGWINCH:
+         std::cout << CLEAR;
+         break;
     }; 
 }
 
@@ -551,7 +554,8 @@ try
         g_euristic = default_euristic(",:;()"); 
 
     if ((signal(SIGQUIT, signal_handler) == SIG_ERR) ||
-        (signal(SIGTSTP, signal_handler) == SIG_ERR)
+        (signal(SIGTSTP, signal_handler) == SIG_ERR) ||
+        (signal(SIGWINCH, signal_handler) == SIG_ERR)
        )
         throw std::runtime_error("signal");
 
