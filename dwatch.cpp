@@ -19,6 +19,7 @@
 
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 #include <iostream>
 #include <fstream>
@@ -34,6 +35,7 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
+#include <atomic>
 
 extern const char *__progname;
 
@@ -62,6 +64,47 @@ std::string    g_datafile;
 
 std::ofstream  g_data;
 
+typedef void(showpol_t)(std::ostream &, int64_t, bool);
+
+std::function<showpol_t> g_showpol;
+std::atomic_int g_sigpol;
+
+std::vector< std::function<showpol_t> > g_showvec = 
+{
+    [](std::ostream &out, int64_t val, bool reset)
+    {
+        if (val != 0)
+        {
+            out << "[" << (g_color ? BOLD : "") << val << RESET << "]";
+        }
+    }, 
+
+    [](std::ostream &out, int64_t val, bool reset) 
+    {
+        auto rate = static_cast<double>(val)/g_interval.count();
+        if (rate != 0.0) {
+            if (rate > 1000000000)
+                out << "[" << (g_color ? BOLD : "") << rate/1000000000 << "G/sec" << RESET << "]";
+            else if (rate > 1000000)
+                out << "[" << (g_color ? BOLD : "") << rate/1000000 << "M/sec" << RESET << "]";
+            else if (rate > 1000)
+                out << "[" << (g_color ? BOLD : "") << rate/1000 << "K/sec" << RESET << "]";
+            else 
+                out << "[" << (g_color ? BOLD : "") << rate << "/sec" << RESET << "]";
+        }
+    },
+
+    [](std::ostream &out, int64_t val, bool reset)
+    {
+        static int counter = 0;
+        if (reset) {
+            counter = 0;
+            return;
+        }
+        out << "[" << (g_color ? BOLD : "") << ++counter << RESET << "]";
+    }
+};
+
 
 //////////////// defaut euristic /////////////////
 
@@ -89,7 +132,13 @@ struct default_euristic
 
     std::string xs;
 };
-                       
+
+
+void signal_handler(int sig)
+{
+    g_sigpol++; 
+}
+
 
 std::vector<range_type>
 get_ranges(const char *str)
@@ -246,26 +295,11 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
     auto mt = m.cbegin(), mt_e = m.cend();
     auto dt = d.cbegin(), dt_e = d.cend();
 
-    auto print_rate = [&]() {
-        auto rate = static_cast<double>(*dt)/g_interval.count();
-        if (rate != 0.0) {
-            if (rate > 1000000000)
-                out << "[" << (g_color ? BOLD : "") << rate/1000000000 << "G/sec" << RESET << "]";
-            else if (rate > 1000000)
-                out << "[" << (g_color ? BOLD : "") << rate/1000000 << "M/sec" << RESET << "]";
-            else if (rate > 1000)
-                out << "[" << (g_color ? BOLD : "") << rate/1000 << "K/sec" << RESET << "]";
-            else 
-                out << "[" << (g_color ? BOLD : "") << rate << "/sec" << RESET << "]";
-        }
-        dt++;
-    };
-
     if (!xs.empty() && xs[0].first == 0) 
         for(; (it != it_e) || (mt != mt_e);)
     {
         if ( mt != mt_e ) out << (g_color ? BLUE : "") << *mt++ << RESET;
-        if ( dt != dt_e ) print_rate();
+        if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
         if ( it != it_e ) out << *it++;
     }
     else 
@@ -273,7 +307,7 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
     {
         if ( it != it_e ) out << *it++;
         if ( mt != mt_e ) out << (g_color ? BLUE : "") << *mt++ << RESET;
-        if ( dt != dt_e ) print_rate();
+        if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
     }
 }   
 
@@ -340,7 +374,16 @@ main_loop(const char *command)
 
     for(int n=0; n < g_seconds; ++n)
     {
-        std::cout << CLEAR << "Every " << g_interval.count() << "s: '" << command << "' "; 
+        // set the display policy
+        //
+        
+        g_showpol = g_showvec[g_sigpol % g_showvec.size()];
+
+        // display the file 
+        //
+
+        std::cout << CLEAR << "Every " << g_interval.count() << "s: '" << command << "' ";
+
         if (g_data.is_open())
             std::cout << "\tdata:" << g_datafile;
 
@@ -395,6 +438,9 @@ main_loop(const char *command)
                 }
             }
         }
+
+        g_showpol(std::cout, 0, /* reset */ true); 
+
         std::this_thread::sleep_for(g_interval);
     }
 
@@ -473,6 +519,9 @@ try
     
     if (!g_euristic)
         g_euristic = default_euristic(",:;()"); 
+
+    if (signal(SIGQUIT, signal_handler) == SIG_ERR)
+        throw std::runtime_error("signal");
 
     return main_loop(*opt);
 }
