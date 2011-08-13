@@ -439,7 +439,7 @@ main_loop(const char *command)
                 "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
             if (g_data.is_open())
                 std::cout << "trace:" << g_datafile;
-            std::cout << '\n'; 
+            std::cout << ELINE  << '\n'; 
 
             size_t i = 0;
             while( (read = ::getline(&line, &len, fp)) != -1 )
