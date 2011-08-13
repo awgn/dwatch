@@ -45,7 +45,9 @@ typedef std::pair<size_t, size_t>  range_type;
 //////////////// global data /////////////////
 
 
-const char * const CLEAR = "\033[2J\033[1;1H";
+const char * const CLEAR = "\E[2J";
+const char * const HOME  = "\E[H";
+const char * const ELINE = "\E[K";
 const char * const BOLD  = "\E[1m";
 const char * const RESET = "\E[0m";
 const char * const BLUE  = "\E[1;34m";
@@ -348,7 +350,7 @@ show_line(size_t n, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
 
-        std::cout << line;
+        std::cout << line << ELINE;
     }
     else 
     {
@@ -372,6 +374,7 @@ show_line(size_t n, const char *line)
 #endif
         // dump the line...
         stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
+        std::cout << ELINE;
     }
 
     dmap[n] = std::make_tuple(h.first, ranges, values); 
@@ -388,6 +391,8 @@ main_loop(const char *command)
             throw std::runtime_error("ofstream::open");
     }
 
+    std::cout << CLEAR;
+
     for(int n=0; n < g_seconds; ++n)
     {
         size_t show_index = (g_sigpol % (g_diffmode ? g_showvec.size() : 2));
@@ -397,17 +402,6 @@ main_loop(const char *command)
         
         g_showpol = g_showvec[show_index];
 
-        // display the file 
-        //
-
-        std::cout << CLEAR << "Every " << g_interval.count() << "s: '" << command << "' diff:" <<
-            (g_color ? BOLD : "") << (g_diffmode ? "ON " : "OFF ") << RESET <<
-            "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
-
-        if (g_data.is_open())
-            std::cout << "trace:" << g_datafile;
-
-        std::cout << '\n';
 
         int status, fds[2];
         if (::pipe(fds) < 0)
@@ -436,6 +430,16 @@ main_loop(const char *command)
             // dump output 
             if (g_data.is_open())
                 g_data << n << '\t';
+
+            // display the file 
+            //
+
+            std::cout << HOME << "Every " << g_interval.count() << "s: '" << command << "' diff:" <<
+                (g_color ? BOLD : "") << (g_diffmode ? "ON " : "OFF ") << RESET <<
+                "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
+            if (g_data.is_open())
+                std::cout << "trace:" << g_datafile;
+            std::cout << '\n'; 
 
             size_t i = 0;
             while( (read = ::getline(&line, &len, fp)) != -1 )
