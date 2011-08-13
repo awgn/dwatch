@@ -357,15 +357,11 @@ show_line(size_t n, const char *line)
                        std::get<2>(it->second).begin(), diff.begin(), std::minus<int64_t>());
 
         // dump datafile if open...
-        bool diffmode = g_diffmode;
-        auto & xs= diffmode ? diff : values;
+        auto & xs= g_diffmode ? diff : values;
         if (g_data.is_open()) {
             for(int64_t x : xs)
             {
-                if (diffmode)
-                    g_data << static_cast<double>(x)/g_interval.count() << '\t';
-                else
-                    g_data << x << '\t';
+                g_data << x << '\t';
             }
         }
 
