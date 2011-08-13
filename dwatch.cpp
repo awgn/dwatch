@@ -48,7 +48,7 @@ typedef std::pair<size_t, size_t>  range_type;
 const char * const CLEAR = "\E[2J";
 const char * const EDOWN = "\E[J";
 const char * const HOME  = "\E[H";
-const char * const ELINE = "\E[K";
+const char * const ELINE = "\E[2K";
 const char * const BOLD  = "\E[1m";
 const char * const RESET = "\E[0m";
 const char * const BLUE  = "\E[1;34m";
@@ -354,7 +354,7 @@ show_line(size_t n, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
 
-        std::cout << line << ELINE << '\n';
+        std::cout << ELINE << line << '\n';
     }
     else 
     {
@@ -377,8 +377,9 @@ show_line(size_t n, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
         // dump the line...
+        std::cout << ELINE;
         stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
-        std::cout << ELINE << '\n';
+        std::cout << '\n';
     }
 
     dmap[n] = std::make_tuple(h.first, ranges, values); 
@@ -435,12 +436,12 @@ main_loop(const char *command)
             // display the header: 
             //
 
-            std::cout << HOME << "Every " << g_interval.count() << "s: '" << command << "' diff:" <<
+            std::cout << HOME << ELINE << "Every " << g_interval.count() << "s: '" << command << "' diff:" <<
                 (g_color ? BOLD : "") << (g_diffmode ? "ON " : "OFF ") << RESET <<
                 "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
             if (g_data.is_open())
                 std::cout << "trace:" << g_datafile;
-            std::cout << ELINE  << '\n'; 
+            std::cout << '\n'; 
 
             // dump the output
             //
@@ -570,7 +571,7 @@ try
 
     if ((signal(SIGQUIT, signal_handler) == SIG_ERR) ||
         (signal(SIGTSTP, signal_handler) == SIG_ERR) ||
-        (signal(SIGWINCH, signal_handler) == SIG_ERR)
+        (signal(SIGWINCH, signal_handler) == SIG_ERR) 
        )
         throw std::runtime_error("signal");
 
