@@ -55,7 +55,6 @@ int g_seconds = std::numeric_limits<int>::max();
 
 std::function<bool(char c)> g_euristic; 
 
-
 std::chrono::seconds g_interval(1);
 
 bool g_color = false;
@@ -67,7 +66,9 @@ std::ofstream  g_data;
 typedef void(showpol_t)(std::ostream &, int64_t, bool);
 
 std::function<showpol_t> g_showpol;
-std::atomic_int g_sigpol;
+std::atomic_int  g_sigpol;
+std::atomic_bool g_diffmode(false); 
+
 
 std::vector< std::function<showpol_t> > g_showvec = 
 {
@@ -75,24 +76,9 @@ std::vector< std::function<showpol_t> > g_showvec =
     {
         if (val != 0)
         {
-            out << "[" << (g_color ? BOLD : "") << val << RESET << "]";
+            out << '[' << (g_color ? BOLD : "") << val << RESET << ']';
         }
     }, 
-
-    [](std::ostream &out, int64_t val, bool reset) 
-    {
-        auto rate = static_cast<double>(val)/g_interval.count();
-        if (rate != 0.0) {
-            if (rate > 1000000000)
-                out << "[" << (g_color ? BOLD : "") << rate/1000000000 << "G/sec" << RESET << "]";
-            else if (rate > 1000000)
-                out << "[" << (g_color ? BOLD : "") << rate/1000000 << "M/sec" << RESET << "]";
-            else if (rate > 1000)
-                out << "[" << (g_color ? BOLD : "") << rate/1000 << "K/sec" << RESET << "]";
-            else 
-                out << "[" << (g_color ? BOLD : "") << rate << "/sec" << RESET << "]";
-        }
-    },
 
     [](std::ostream &out, int64_t val, bool reset)
     {
@@ -101,7 +87,26 @@ std::vector< std::function<showpol_t> > g_showvec =
             counter = 0;
             return;
         }
-        out << "[" << (g_color ? BOLD : "") << ++counter << RESET << "]";
+        out << '(' << (g_color ? BOLD : "") << ++counter << RESET << ')';
+    },
+
+    /* policy suitable for diffmode */
+
+    [](std::ostream &out, int64_t val, bool reset) 
+    {
+        auto rate = static_cast<double>(val)/g_interval.count();
+        if (rate != 0.0) {
+            out << '[';
+            if (rate > 1000000000)
+                out << (g_color ? BOLD : "") << rate/1000000000 << "G/sec" << RESET; 
+            else if (rate > 1000000)
+                out << (g_color ? BOLD : "") << rate/1000000 << "M/sec" << RESET; 
+            else if (rate > 1000)
+                out << (g_color ? BOLD : "") << rate/1000 << "K/sec" << RESET; 
+            else 
+                out << (g_color ? BOLD : "") << rate << "/sec" << RESET;
+            out << ']';
+        }
     }
 };
 
@@ -136,7 +141,15 @@ struct default_euristic
 
 void signal_handler(int sig)
 {
-    g_sigpol++; 
+    switch(sig)
+    {
+    case SIGQUIT: 
+         g_sigpol++;
+         break;
+    case SIGTSTP:
+         g_diffmode.store(g_diffmode.load() ? false : true);
+         break;
+    }; 
 }
 
 
@@ -344,10 +357,17 @@ show_line(size_t n, const char *line)
                        std::get<2>(it->second).begin(), diff.begin(), std::minus<int64_t>());
 
         // dump datafile if open...
-        if (g_data.is_open())
-            std::for_each(diff.begin(), diff.end(), [&](int64_t d) {
-                g_data << static_cast<double>(d)/g_interval.count() << '\t';
-            });
+        bool diffmode = g_diffmode;
+        auto & xs= diffmode ? diff : values;
+        if (g_data.is_open()) {
+            for(int64_t x : xs)
+            {
+                if (diffmode)
+                    g_data << static_cast<double>(x)/g_interval.count() << '\t';
+                else
+                    g_data << x << '\t';
+            }
+        }
 
 #ifdef DEBUG
         std::cout << "+"   << c0 << c1 << c2 << c3 << 
@@ -355,7 +375,7 @@ show_line(size_t n, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
         // dump the line...
-        stream_line(std::cout, get_immutables(line, ranges), values, diff, ranges);
+        stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
     }
 
     dmap[n] = std::make_tuple(h.first, ranges, values); 
@@ -374,18 +394,22 @@ main_loop(const char *command)
 
     for(int n=0; n < g_seconds; ++n)
     {
+        size_t show_index = (g_sigpol % (g_diffmode ? g_showvec.size() : 2));
+
         // set the display policy
         //
         
-        g_showpol = g_showvec[g_sigpol % g_showvec.size()];
+        g_showpol = g_showvec[show_index];
 
         // display the file 
         //
 
-        std::cout << CLEAR << "Every " << g_interval.count() << "s: '" << command << "' ";
+        std::cout << CLEAR << "Every " << g_interval.count() << "s: '" << command << "' diff:" <<
+            (g_color ? BOLD : "") << (g_diffmode ? "ON " : "OFF ") << RESET <<
+            "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
 
         if (g_data.is_open())
-            std::cout << "\tdata:" << g_datafile;
+            std::cout << "trace:" << g_datafile;
 
         std::cout << '\n';
 
@@ -451,7 +475,8 @@ main_loop(const char *command)
 void usage()
 {
     std::cout << "usage: " << __progname << 
-        " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out ] [-e|--euristic level] [-n sec] command [args...]" << std::endl;
+        " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out]\n"
+        "       [-e|--euristic level] [-d|--diff] [-n sec] command [args...]" << std::endl;
 }
 
 
@@ -483,6 +508,11 @@ try
         if (!std::strcmp(*opt, "-c") || !std::strcmp(*opt, "--color"))
         {
             g_color = true;
+            continue;
+        }
+        if (!std::strcmp(*opt, "-d") || !std::strcmp(*opt, "--diff"))
+        {
+            g_diffmode.store(true);
             continue;
         }
         if (!std::strcmp(*opt, "-i") || !std::strcmp(*opt, "--interval"))
@@ -520,7 +550,9 @@ try
     if (!g_euristic)
         g_euristic = default_euristic(",:;()"); 
 
-    if (signal(SIGQUIT, signal_handler) == SIG_ERR)
+    if ((signal(SIGQUIT, signal_handler) == SIG_ERR) ||
+        (signal(SIGTSTP, signal_handler) == SIG_ERR)
+       )
         throw std::runtime_error("signal");
 
     return main_loop(*opt);
