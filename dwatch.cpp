@@ -46,6 +46,7 @@ typedef std::pair<size_t, size_t>  range_type;
 
 
 const char * const CLEAR = "\E[2J";
+const char * const EDOWN = "\E[J";
 const char * const HOME  = "\E[H";
 const char * const ELINE = "\E[K";
 const char * const BOLD  = "\E[1m";
@@ -76,7 +77,7 @@ std::vector< std::function<showpol_t> > g_showvec =
 {
     [](std::ostream &out, int64_t val, bool reset)
     {
-        if (val != 0)
+        if (val != 0 && g_diffmode)
         {
             out << '[' << (g_color ? BOLD : "") << val << RESET << ']';
         }
@@ -353,7 +354,7 @@ show_line(size_t n, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
 
-        std::cout << line << ELINE;
+        std::cout << line << ELINE << '\n';
     }
     else 
     {
@@ -377,7 +378,7 @@ show_line(size_t n, const char *line)
 #endif
         // dump the line...
         stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
-        std::cout << ELINE;
+        std::cout << ELINE << '\n';
     }
 
     dmap[n] = std::make_tuple(h.first, ranges, values); 
@@ -414,7 +415,9 @@ main_loop(const char *command)
         if (pid == -1)
             throw std::runtime_error(std::string("fork: ").append(strerror(errno)));
 
-        if (pid == 0) {  /* child */
+        if (pid == 0) {  
+            
+            /* child */
 
             ::close(fds[0]); /* for reading */
             ::close(1);
@@ -423,18 +426,13 @@ main_loop(const char *command)
             ::execl("/bin/sh", "sh", "-c", command, NULL);
             ::_exit(127);
         }
-        else { /* parent */
+        else { 
+            
+            /* parent */
 
             ::close(fds[1]); /* for writing */
 
-            FILE * fp = ::fdopen(fds[0], "r");
-            char *line; size_t len = 0; ssize_t read;
-
-            // dump output 
-            if (g_data.is_open())
-                g_data << n << '\t';
-
-            // display the file 
+            // display the header: 
             //
 
             std::cout << HOME << "Every " << g_interval.count() << "s: '" << command << "' diff:" <<
@@ -444,17 +442,34 @@ main_loop(const char *command)
                 std::cout << "trace:" << g_datafile;
             std::cout << ELINE  << '\n'; 
 
-            size_t i = 0;
-            while( (read = ::getline(&line, &len, fp)) != -1 )
+            // dump the output
+            //
+
+            if (g_data.is_open())
+                g_data << n << '\t';
+            
+            FILE * fp = ::fdopen(fds[0], "r");
+            char *line = NULL;  
+            size_t nbyte, len = 0, i = 0;
+            
+            while( (nbyte = ::getline(&line, &len, fp)) != -1 )
             {   
+                // replace '\n' with '\0'...
+                line[nbyte-1] = '\0';
                 show_line(i++,line); 
             }
 
-            if (g_data.is_open())
-                g_data << std::endl;
+            // flush the stdout...
+            std::cout << EDOWN << std::flush;
 
             ::free(line);
             ::fclose(fp);
+            
+            // dump output
+            //
+            
+            if (g_data.is_open())
+                g_data << std::endl;
 
             /* wait for termination */
 
