@@ -513,7 +513,7 @@ void usage()
 {
     std::cout << "usage: " << __progname << 
         " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out]\n"
-        "       [-e|--euristic level] [-d|--diff] [-n sec] command [args...]" << std::endl;
+        "       [-e|--euristic level] [-d|--diff] [-b|--tab column] [-n sec] 'command' ['commands'...] " << std::endl;
 }
 
 
