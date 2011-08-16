@@ -47,14 +47,16 @@ typedef std::pair<size_t, size_t>  range_type;
 
 const char * const CLEAR = "\E[2J";
 const char * const EDOWN = "\E[J";
+const char * const DOWN  = "\E[1B";
 const char * const HOME  = "\E[H";
-const char * const ELINE = "\E[2K";
+const char * const ELINE = "\E[K";
 const char * const BOLD  = "\E[1m";
 const char * const RESET = "\E[0m";
 const char * const BLUE  = "\E[1;34m";
 const char * const RED   = "\E[31m";
 
 int g_seconds = std::numeric_limits<int>::max();
+int g_tab = 0;
 
 std::function<bool(char c)> g_euristic; 
 
@@ -332,7 +334,7 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
 
 
 void 
-show_line(size_t n, const char *line)
+show_line(size_t n, size_t col, const char *line)
 {
     static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<range_type>, std::vector<int64_t> >> dmap;
 
@@ -354,7 +356,7 @@ show_line(size_t n, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
 
-        std::cout << ELINE << line << '\n';
+        std::cout << "\E[" << col << "C" << ELINE << line << '\n';
     }
     else 
     {
@@ -377,7 +379,7 @@ show_line(size_t n, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
         // dump the line...
-        std::cout << ELINE;
+        std::cout << "\E[" << col << "C" << ELINE;
         stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
         std::cout << '\n';
     }
@@ -387,7 +389,7 @@ show_line(size_t n, const char *line)
 
 
 int 
-main_loop(const char *command)
+main_loop(const std::vector<std::string>& commands)
 {
     // open data file...
     if (!g_datafile.empty()) {
@@ -407,81 +409,97 @@ main_loop(const char *command)
         
         g_showpol = g_showvec[show_index];
 
+        // display the header: 
+        //
 
-        int status, fds[2];
-        if (::pipe(fds) < 0)
-            throw std::runtime_error(std::string("pipe: ").append(strerror(errno)));
+        std::cout << HOME << ELINE << "Every " << g_interval.count() << "s: ";  
+        std::for_each(commands.begin(), commands.end(), [](const std::string &c) {
+                      std::cout << "'" << c << "' ";
+                      });
+        std::cout << "diff:" << (g_color ? BOLD : "") << (g_diffmode ? "ON " : "OFF ") << RESET <<
+            "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
 
-        pid_t pid = fork();
-        if (pid == -1)
-            throw std::runtime_error(std::string("fork: ").append(strerror(errno)));
+        if (g_data.is_open())
+            std::cout << "trace:" << g_datafile;
+        std::cout << '\n'; 
 
-        if (pid == 0) {  
-            
-            /* child */
+        // dump output of different commands...
+        //        
+        
+        size_t i = 0, j = -1;
+        for(const std::string &command : commands)
+        {
+            j++;
 
-            ::close(fds[0]); /* for reading */
-            ::close(1);
-            ::dup2(fds[1], 1);
-
-            ::execl("/bin/sh", "sh", "-c", command, NULL);
-            ::_exit(127);
-        }
-        else { 
-            
-            /* parent */
-
-            ::close(fds[1]); /* for writing */
-
-            // display the header: 
-            //
-
-            std::cout << HOME << ELINE << "Every " << g_interval.count() << "s: '" << command << "' diff:" <<
-                (g_color ? BOLD : "") << (g_diffmode ? "ON " : "OFF ") << RESET <<
-                "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
-            if (g_data.is_open())
-                std::cout << "trace:" << g_datafile;
-            std::cout << '\n'; 
-
-            // dump the output
-            //
-
-            if (g_data.is_open())
-                g_data << n << '\t';
-            
-            FILE * fp = ::fdopen(fds[0], "r");
-            char *line = NULL;  
-            size_t nbyte, len = 0, i = 0;
-            
-            while( (nbyte = ::getline(&line, &len, fp)) != -1 )
-            {   
-                // replace '\n' with '\0'...
-                line[nbyte-1] = '\0';
-                show_line(i++,line); 
+            if (g_tab) {
+                std::cout << HOME << DOWN;
             }
 
-            // flush the stdout...
-            std::cout << EDOWN << std::flush;
+            int status, fds[2];
+            if (::pipe(fds) < 0)
+                throw std::runtime_error(std::string("pipe: ").append(strerror(errno)));
 
-            ::free(line);
-            ::fclose(fp);
-            
-            // dump output
-            //
-            
-            if (g_data.is_open())
-                g_data << std::endl;
+            pid_t pid = fork();
+            if (pid == -1)
+                throw std::runtime_error(std::string("fork: ").append(strerror(errno)));
 
-            /* wait for termination */
+            if (pid == 0) {  
+                
+                /// child ///
 
-            while (::waitpid(pid, &status, 0) == -1) {
-                if (errno != EINTR) {     
-                    status = -1;
-                    break;  /* exit loop */
+                ::close(fds[0]); // for reading
+                ::close(1);
+                ::dup2(fds[1], 1);
+
+                ::execl("/bin/sh", "sh", "-c", command.c_str(), NULL);
+                ::_exit(127);
+            }
+            else { 
+                
+                /// parent ///
+
+                ::close(fds[1]); // for writing 
+
+                // dump the output
+                //
+
+                if (g_data.is_open())
+                    g_data << n << '\t';
+                
+                FILE * fp = ::fdopen(fds[0], "r");
+                char *line = NULL;  
+                size_t nbyte, len = 0;
+                
+                while( (nbyte = ::getline(&line, &len, fp)) != -1 )
+                {   
+                    // replace '\n' with '\0'...
+                    line[nbyte-1] = '\0';
+                    show_line(i++, g_tab *j, line); 
+                }
+
+                // flush the stdout...
+                std::cout << EDOWN << std::flush;
+
+                ::free(line);
+                ::fclose(fp);
+                
+                // dump output
+                //
+                
+                if (g_data.is_open())
+                    g_data << std::endl;
+
+                // wait for termination 
+
+                while (::waitpid(pid, &status, 0) == -1) {
+                    if (errno != EINTR) {     
+                        status = -1;
+                        break;  /* exit loop */
+                    }
                 }
             }
         }
-
+        
         g_showpol(std::cout, 0, /* reset */ true); 
 
         std::this_thread::sleep_for(g_interval);
@@ -544,6 +562,11 @@ try
             g_datafile.assign(*++opt);
             continue;
         }
+        if (!std::strcmp(*opt, "-b") || !std::strcmp(*opt, "--tab"))
+        {
+            g_tab = std::atoi(*++opt);
+            continue;
+        }
         if (!std::strcmp(*opt, "-e") || !std::strcmp(*opt, "--euristic"))
         {
             switch (atoi(*++opt))
@@ -575,7 +598,8 @@ try
        )
         throw std::runtime_error("signal");
 
-    return main_loop(*opt);
+    std::vector<std::string> commands(opt, argv+argc);
+    return main_loop(commands);
 }
 catch(std::exception &e)
 {
