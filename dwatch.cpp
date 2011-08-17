@@ -19,6 +19,7 @@
 
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
 #include <signal.h>
 
 #include <iostream>
@@ -45,15 +46,47 @@ typedef std::pair<size_t, size_t>  range_type;
 //////////////// global data /////////////////
 
 
-const char * const CLEAR = "\E[2J";
-const char * const EDOWN = "\E[J";
-const char * const DOWN  = "\E[1B";
-const char * const HOME  = "\E[H";
-const char * const ELINE = "\E[K";
-const char * const BOLD  = "\E[1m";
-const char * const RESET = "\E[0m";
-const char * const BLUE  = "\E[1;34m";
-const char * const RED   = "\E[31m";
+namespace vt100 
+{
+    const char * const CLEAR = "\E[2J";
+    const char * const EDOWN = "\E[J";
+    const char * const DOWN  = "\E[1B";
+    const char * const HOME  = "\E[H";
+    const char * const ELINE = "\E[K";
+    const char * const BOLD  = "\E[1m";
+    const char * const RESET = "\E[0m";
+    const char * const BLUE  = "\E[1;34m";
+    const char * const RED   = "\E[31m";
+
+    inline std::pair<unsigned short, unsigned short>
+    winsize()
+    {
+        struct winsize w;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1)
+            throw std::runtime_error("TIOCGWINSZ");
+        return std::make_pair(w.ws_row, w.ws_col);
+    }
+
+    template <typename CharT, typename Traits>
+    typename std::basic_ostream<CharT, Traits> &
+    eline(std::basic_ostream<CharT, Traits> &out, size_t pos, size_t n = std::numeric_limits<size_t>::max()) 
+    {
+        out << "\r\E[" << pos << 'C'; 
+        
+        if (n == std::numeric_limits<size_t>::max())
+        {
+            return out << ELINE;
+        }
+
+        n = std::min(n, winsize().second - pos);
+        for(size_t i = 0; i < n; ++i)
+           out.put(' ');
+        
+        return out << "\r\E[" << pos << 'C'; 
+    }
+
+}
+
 
 int g_seconds = std::numeric_limits<int>::max();
 int g_tab = 0;
@@ -77,39 +110,39 @@ std::atomic_bool g_diffmode(false);
 
 std::vector< std::function<showpol_t> > g_showvec = 
 {
-    [](std::ostream &out, int64_t val, bool reset)
+    [](std::ostream &out, int64_t val, bool)
     {
         if (val != 0 && g_diffmode)
         {
-            out << '[' << (g_color ? BOLD : "") << val << RESET << ']';
+            out << '[' << (g_color ? vt100::BOLD : "") << val << vt100::RESET << ']';
         }
     }, 
 
-    [](std::ostream &out, int64_t val, bool reset)
+    [](std::ostream &out, int64_t, bool reset)
     {
         static int counter = 0;
         if (reset) {
             counter = 0;
             return;
         }
-        out << '(' << (g_color ? BOLD : "") << ++counter << RESET << ')';
+        out << '(' << (g_color ? vt100::BOLD : "") << ++counter << vt100::RESET << ')';
     },
 
     /* policy suitable for diffmode */
 
-    [](std::ostream &out, int64_t val, bool reset) 
+    [](std::ostream &out, int64_t val, bool) 
     {
         auto rate = static_cast<double>(val)/g_interval.count();
         if (rate != 0.0) {
             out << '[';
             if (rate > 1000000000)
-                out << (g_color ? BOLD : "") << rate/1000000000 << "G/sec" << RESET; 
+                out << (g_color ? vt100::BOLD : "") << rate/1000000000 << "G/sec" << vt100::RESET; 
             else if (rate > 1000000)
-                out << (g_color ? BOLD : "") << rate/1000000 << "M/sec" << RESET; 
+                out << (g_color ? vt100::BOLD : "") << rate/1000000 << "M/sec" << vt100::RESET; 
             else if (rate > 1000)
-                out << (g_color ? BOLD : "") << rate/1000 << "K/sec" << RESET; 
+                out << (g_color ? vt100::BOLD : "") << rate/1000 << "K/sec" << vt100::RESET; 
             else 
-                out << (g_color ? BOLD : "") << rate << "/sec" << RESET;
+                out << (g_color ? vt100::BOLD : "") << rate << "/sec" << vt100::RESET;
             out << ']';
         }
     }
@@ -155,7 +188,7 @@ void signal_handler(int sig)
          g_diffmode.store(g_diffmode.load() ? false : true);
          break;
     case SIGWINCH:
-         std::cout << CLEAR;
+         std::cout << vt100::CLEAR;
          break;
     }; 
 }
@@ -319,7 +352,7 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
     if (!xs.empty() && xs[0].first == 0) 
         for(; (it != it_e) || (mt != mt_e);)
     {
-        if ( mt != mt_e ) out << (g_color ? BLUE : "") << *mt++ << RESET;
+        if ( mt != mt_e ) out << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
         if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
         if ( it != it_e ) out << *it++;
     }
@@ -327,7 +360,7 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
         for(; (it != it_e) || (mt != mt_e);)
     {
         if ( it != it_e ) out << *it++;
-        if ( mt != mt_e ) out << (g_color ? BLUE : "") << *mt++ << RESET;
+        if ( mt != mt_e ) out << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
         if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
     }
 }   
@@ -356,15 +389,7 @@ show_line(size_t n, size_t col, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
 
-        std::cout << "\r\E[" << col << "C"; 
-        if (g_tab) {
-            for(int i = 0; i < g_tab; i++)
-                std::cout << ' ';
-            std::cout << "\r\E[" << col << "C"; 
-        } else {
-            std::cout << ELINE;
-        }
-        std::cout << line << '\n';
+        vt100::eline(std::cout, col, g_tab) << line << '\n';
     }
     else 
     {
@@ -386,15 +411,8 @@ show_line(size_t n, size_t col, const char *line)
                      " h:" << std::hex << h.first << std::dec << 
                      "'"   << h.second << "' -> ";
 #endif
-        // dump the line...
-        std::cout << "\r\E[" << col << "C";
-        if (g_tab) {
-            for(int i = 0; i < g_tab; i++)
-                std::cout << ' ';
-            std::cout << "\r\E[" << col << "C";
-        } else {
-            std::cout << ELINE;
-        }
+        
+        vt100::eline(std::cout, col, g_tab); 
         stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
         std::cout << '\n';
     }
@@ -413,7 +431,7 @@ main_loop(const std::vector<std::string>& commands)
             throw std::runtime_error("ofstream::open");
     }
 
-    std::cout << CLEAR;
+    std::cout << vt100::CLEAR;
 
     for(int n=0; n < g_seconds; ++n)
     {
@@ -427,12 +445,12 @@ main_loop(const std::vector<std::string>& commands)
         // display the header: 
         //
 
-        std::cout << HOME << ELINE << "Every " << g_interval.count() << "s: ";  
+        std::cout << vt100::HOME << vt100::ELINE << "Every " << g_interval.count() << "s: ";  
         std::for_each(commands.begin(), commands.end(), [](const std::string &c) {
                       std::cout << "'" << c << "' ";
                       });
-        std::cout << "diff:" << (g_color ? BOLD : "") << (g_diffmode ? "ON " : "OFF ") << RESET <<
-            "showmode:" << (g_color ? BOLD : "") << show_index << RESET << " ";
+        std::cout << "diff:" << (g_color ? vt100::BOLD : "") << (g_diffmode ? "ON " : "OFF ") << vt100::RESET <<
+            "showmode:" << (g_color ? vt100::BOLD : "") << show_index << vt100::RESET << " ";
 
         if (g_data.is_open())
             std::cout << "trace:" << g_datafile;
@@ -447,7 +465,7 @@ main_loop(const std::vector<std::string>& commands)
             j++;
 
             if (g_tab) {
-                std::cout << HOME << DOWN;
+                std::cout << vt100::HOME << vt100::DOWN;
             }
 
             int status, fds[2];
@@ -493,7 +511,7 @@ main_loop(const std::vector<std::string>& commands)
                 }
 
                 // flush the stdout...
-                std::cout << EDOWN << std::flush;
+                std::cout << vt100::EDOWN << std::flush;
 
                 ::free(line);
                 ::fclose(fp);
