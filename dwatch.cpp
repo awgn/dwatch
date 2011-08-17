@@ -356,7 +356,15 @@ show_line(size_t n, size_t col, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
 
-        std::cout << "\E[" << col << "C" << ELINE << line << '\n';
+        std::cout << "\r\E[" << col << "C"; 
+        if (g_tab) {
+            for(int i = 0; i < g_tab; i++)
+                std::cout << ' ';
+            std::cout << "\r\E[" << col << "C"; 
+        } else {
+            std::cout << ELINE;
+        }
+        std::cout << line << '\n';
     }
     else 
     {
@@ -379,7 +387,14 @@ show_line(size_t n, size_t col, const char *line)
                      "'"   << h.second << "' -> ";
 #endif
         // dump the line...
-        std::cout << "\E[" << col << "C" << ELINE;
+        std::cout << "\r\E[" << col << "C";
+        if (g_tab) {
+            for(int i = 0; i < g_tab; i++)
+                std::cout << ' ';
+            std::cout << "\r\E[" << col << "C";
+        } else {
+            std::cout << ELINE;
+        }
         stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
         std::cout << '\n';
     }
