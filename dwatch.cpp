@@ -437,6 +437,12 @@ main_loop(const std::vector<std::string>& commands)
         if (g_data.is_open())
             std::cout << "trace:" << g_datafile;
         std::cout << '\n'; 
+        
+        // dump the timestamp on trace output
+        //
+
+        if (g_data.is_open())
+            g_data << n << '\t';
 
         // dump output of different commands...
         //        
@@ -473,11 +479,6 @@ main_loop(const std::vector<std::string>& commands)
 
             ::close(fds[1]); // for writing 
 
-            // dump the output
-            //
-
-            if (g_data.is_open())
-                g_data << n << '\t';
             
             FILE * fp = ::fdopen(fds[0], "r");
             char *line = NULL;  
@@ -510,11 +511,6 @@ main_loop(const std::vector<std::string>& commands)
             ::free(line);
             ::fclose(fp);
             
-            // dump output
-            //
-            
-            if (g_data.is_open())
-                g_data << std::endl;
 
             // wait for termination 
 
@@ -532,6 +528,12 @@ main_loop(const std::vector<std::string>& commands)
                  WEXITSTATUS(status) == 127 )
                 throw std::runtime_error(std::string("exec: ") + command + std::string(" : error!"));
         }
+        
+        // dump new-line on data...
+        //
+            
+        if (g_data.is_open())
+            g_data << std::endl;
         
         g_showpol(std::cout, 0, /* reset */ true); 
 
