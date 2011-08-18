@@ -21,10 +21,10 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <signal.h>
+#include <unistd.h>
 
 #include <iostream>
 #include <fstream>
-#include <limits>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -63,17 +63,17 @@ namespace vt100
     {
         struct winsize w;
         if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == -1)
-            throw std::runtime_error("TIOCGWINSZ");
+            return std::make_pair(0,0);
         return std::make_pair(w.ws_row, w.ws_col);
     }
 
     template <typename CharT, typename Traits>
     typename std::basic_ostream<CharT, Traits> &
-    eline(std::basic_ostream<CharT, Traits> &out, size_t pos, size_t n = std::numeric_limits<size_t>::max()) 
+    eline(std::basic_ostream<CharT, Traits> &out, size_t pos, size_t n = 0) 
     {
         out << "\r\E[" << pos << 'C'; 
         
-        if (n == std::numeric_limits<size_t>::max())
+        if (n == 0)
         {
             return out << ELINE;
         }
@@ -96,6 +96,7 @@ std::function<bool(char c)> g_euristic;
 std::chrono::seconds g_interval(1);
 
 bool g_color = false;
+bool g_daemon = false;
 
 std::string    g_datafile;
 
@@ -342,8 +343,8 @@ hash_line(const char *s, const std::vector<range_type> &xs)
 
 
 void
-stream_line(std::ostream &out, const std::vector<std::string> &i, 
-            const std::vector<int64_t> &m, const std::vector<int64_t> &d, std::vector<range_type> &xs)
+show_line(const std::vector<std::string> &i, const std::vector<int64_t> &m, 
+          const std::vector<int64_t> &d, std::vector<range_type> &xs)
 {
     auto it = i.cbegin(), it_e = i.cend();
     auto mt = m.cbegin(), mt_e = m.cend();
@@ -352,72 +353,53 @@ stream_line(std::ostream &out, const std::vector<std::string> &i,
     if (!xs.empty() && xs[0].first == 0) 
         for(; (it != it_e) || (mt != mt_e);)
     {
-        if ( mt != mt_e ) out << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
-        if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
-        if ( it != it_e ) out << *it++;
+        if ( mt != mt_e ) std::cout << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
+        if ( dt != dt_e ) g_showpol(std::cout, *dt++, /* reset */ false);
+        if ( it != it_e ) std::cout << *it++;
     }
     else 
         for(; (it != it_e) || (mt != mt_e);)
     {
-        if ( it != it_e ) out << *it++;
-        if ( mt != mt_e ) out << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
-        if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
+        if ( it != it_e ) std::cout << *it++;
+        if ( mt != mt_e ) std::cout << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
+        if ( dt != dt_e ) g_showpol(std::cout, *dt++, /* reset */ false);
     }
 }   
 
 
-void 
-show_line(size_t n, size_t col, const char *line)
+std::pair< std::vector<int64_t>, std::vector<int64_t> >
+process_line(size_t n, size_t col, const char *line)
 {
     static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<range_type>, std::vector<int64_t> >> dmap;
 
     auto ranges = get_ranges(line);
-    auto h      = hash_line(line, ranges);
     auto values = get_mutables(line, ranges);
-    auto it     = dmap.find(n);
+    auto imm = get_immutables(line, ranges);
+    auto h = hash_line(line, ranges);
 
-    bool c0 = (it == dmap.end());
-    bool c1 = c0 || (ranges.empty());
-    bool c2 = c1 || std::get<0>(it->second) != h.first;
-    bool c3 = c2 || std::get<1>(it->second).size() != ranges.size();
-
-    if (c3) 
+    decltype(values) diff(values.size());
+    
+    auto it = dmap.find(n);
+    if (it != dmap.end())
     {
-#ifdef DEBUG
-        std::cout << "+"   << c0 << c1 << c2 << c3 << 
-                     " h:" << std::hex << h.first << std::dec << 
-                     "'"   << h.second << "' -> ";
-#endif
-
-        vt100::eline(std::cout, col, g_tab) << line << '\n';
-    }
-    else 
-    {
-        decltype(values) diff(values.size());
         std::transform(values.begin(), values.end(),
                        std::get<2>(it->second).begin(), diff.begin(), std::minus<int64_t>());
-
-        // dump datafile if open...
-        auto & xs= g_diffmode ? diff : values;
-        if (g_data.is_open()) {
-            for(int64_t x : xs)
-            {
-                g_data << x << '\t';
-            }
-        }
-
-#ifdef DEBUG
-        std::cout << "+"   << c0 << c1 << c2 << c3 << 
-                     " h:" << std::hex << h.first << std::dec << 
-                     "'"   << h.second << "' -> ";
-#endif
-        
-        vt100::eline(std::cout, col, g_tab); 
-        stream_line(std::cout, get_immutables(line, ranges), values, xs, ranges);
-        std::cout << '\n';
     }
-
+    
     dmap[n] = std::make_tuple(h.first, ranges, values); 
+    
+    // show this line...
+    //
+    
+    auto &xs = g_diffmode ? diff : values;
+
+    // clear this line, completely or partially
+    
+    vt100::eline(std::cout, col, g_tab); 
+    show_line(imm, values, xs, ranges);
+    std::cout << '\n';
+
+    return std::make_pair(values, diff);
 }
 
 
@@ -483,54 +465,72 @@ main_loop(const std::vector<std::string>& commands)
                 ::close(fds[0]); // for reading
                 ::close(1);
                 ::dup2(fds[1], 1);
-
                 ::execl("/bin/sh", "sh", "-c", command.c_str(), NULL);
                 ::_exit(127);
             }
-            else { 
                 
-                /// parent ///
+            /// parent ///
 
-                ::close(fds[1]); // for writing 
+            ::close(fds[1]); // for writing 
 
-                // dump the output
-                //
+            // dump the output
+            //
 
-                if (g_data.is_open())
-                    g_data << n << '\t';
+            if (g_data.is_open())
+                g_data << n << '\t';
+            
+            FILE * fp = ::fdopen(fds[0], "r");
+            char *line = NULL;  
+            size_t nbyte, len = 0;
+            
+            while( (nbyte = ::getline(&line, &len, fp)) != -1 )
+            {   
+                // replace '\n' with '\0'...
+                line[nbyte-1] = '\0';
+
+                // process and show this line...
+                    
+                auto data = process_line(i++, g_tab *j, line); 
                 
-                FILE * fp = ::fdopen(fds[0], "r");
-                char *line = NULL;  
-                size_t nbyte, len = 0;
+                // dump to datafile if open...
                 
-                while( (nbyte = ::getline(&line, &len, fp)) != -1 )
-                {   
-                    // replace '\n' with '\0'...
-                    line[nbyte-1] = '\0';
-                    show_line(i++, g_tab *j, line); 
-                }
-
-                // flush the stdout...
-                std::cout << vt100::EDOWN << std::flush;
-
-                ::free(line);
-                ::fclose(fp);
-                
-                // dump output
-                //
-                
-                if (g_data.is_open())
-                    g_data << std::endl;
-
-                // wait for termination 
-
-                while (::waitpid(pid, &status, 0) == -1) {
-                    if (errno != EINTR) {     
-                        status = -1;
-                        break;  /* exit loop */
+                if (g_data.is_open()) {
+                    auto & xs = g_diffmode ? data.second : data.first;
+                    for(int64_t x : xs)
+                    {
+                        g_data << x << '\t';
                     }
                 }
             }
+
+            // flush the stdout...
+            //
+            std::cout << vt100::EDOWN << std::flush;
+
+            ::free(line);
+            ::fclose(fp);
+            
+            // dump output
+            //
+            
+            if (g_data.is_open())
+                g_data << std::endl;
+
+            // wait for termination 
+
+            while (::waitpid(pid, &status, 0) == -1) {
+                if (errno != EINTR) {     
+                    throw std::runtime_error("waitpid");
+                }
+            }
+
+            // std::cout << "exit:" << WIFEXITED(status) << " code:" << WEXITSTATUS(status) << std::endl;
+
+            if (!WIFEXITED(status) || 
+                 WEXITSTATUS(status) == 2 ||
+                 WEXITSTATUS(status) == 126 ||
+                 WEXITSTATUS(status) == 127 )
+                throw std::runtime_error(std::string("exec: ") + command + std::string(" : error!"));
         }
         
         g_showpol(std::cout, 0, /* reset */ true); 
@@ -546,9 +546,11 @@ void usage()
 {
     std::cout << "usage: " << __progname << 
         " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out]\n"
-        "       [-e|--euristic level] [-d|--diff] [-b|--tab column] [-n sec] 'command' ['commands'...] " << std::endl;
+        "       [-e|--euristic level] [-d|--diff] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
 }
 
+
+#ifndef DWATCH_LIB
 
 int
 main(int argc, char *argv[])
@@ -563,7 +565,7 @@ try
 
     // parse command line option...
     //
-    
+
     for ( ; opt != (argv + argc) ; opt++)
     {
         if (!std::strcmp(*opt, "-h") || !std::strcmp(*opt, "--help"))
@@ -595,9 +597,14 @@ try
             g_datafile.assign(*++opt);
             continue;
         }
-        if (!std::strcmp(*opt, "-b") || !std::strcmp(*opt, "--tab"))
+        if (!std::strcmp(*opt, "--tab"))
         {
             g_tab = std::atoi(*++opt);
+            continue;
+        }
+        if (!std::strcmp(*opt, "--daemon"))
+        {
+            g_daemon = true;
             continue;
         }
         if (!std::strcmp(*opt, "-e") || !std::strcmp(*opt, "--euristic"))
@@ -631,10 +638,18 @@ try
        )
         throw std::runtime_error("signal");
 
+    if (g_daemon && g_datafile.empty())
+        throw std::runtime_error("--daemon option meaningless without --trace");
+
+    if (g_daemon) daemon(1,0);
+
     std::vector<std::string> commands(opt, argv+argc);
+
     return main_loop(commands);
 }
 catch(std::exception &e)
 {
     std::cerr << __progname << ": " << e.what() << std::endl;
 }
+
+#endif
