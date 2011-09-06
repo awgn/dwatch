@@ -20,7 +20,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
-#include <signal.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -34,9 +33,10 @@
 #include <functional>
 #include <algorithm>
 #include <stdexcept>
+#include <csignal>
+
 #include <thread>
 #include <unordered_map>
-#include <atomic>
 
 extern const char *__progname;
 
@@ -105,20 +105,13 @@ std::ofstream  g_data;
 typedef void(showpol_t)(std::ostream &, int64_t, bool);
 
 std::function<showpol_t> g_showpol;
-std::atomic_int  g_sigpol;
-std::atomic_bool g_diffmode(false); 
+
+volatile std::sig_atomic_t  g_sigpol;
+volatile std::sig_atomic_t  g_diffmode = 0; 
 
 
 std::vector< std::function<showpol_t> > g_showvec = 
 {
-    [](std::ostream &out, int64_t val, bool)
-    {
-        if (val != 0 && g_diffmode)
-        {
-            out << '[' << (g_color ? vt100::BOLD : "") << val << vt100::RESET << ']';
-        }
-    }, 
-
     [](std::ostream &out, int64_t, bool reset)
     {
         static int counter = 0;
@@ -126,8 +119,16 @@ std::vector< std::function<showpol_t> > g_showvec =
             counter = 0;
             return;
         }
-        out << '(' << (g_color ? vt100::BOLD : "") << ++counter << vt100::RESET << ')';
+        out << '[' << (g_color ? vt100::BOLD : "") << ++counter << vt100::RESET << ']';
     },
+    
+    [](std::ostream &out, int64_t val, bool)
+    {
+        if (val != 0 && g_diffmode)
+        {
+            out << '(' << (g_color ? vt100::BOLD : "") << val << vt100::RESET << ')';
+        }
+    }, 
 
     /* policy suitable for diffmode */
 
@@ -135,7 +136,7 @@ std::vector< std::function<showpol_t> > g_showvec =
     {
         auto rate = static_cast<double>(val)/g_interval.count();
         if (rate != 0.0) {
-            out << '[';
+            out << '(';
             if (rate > 1000000000)
                 out << (g_color ? vt100::BOLD : "") << rate/1000000000 << "G/sec" << vt100::RESET; 
             else if (rate > 1000000)
@@ -144,7 +145,7 @@ std::vector< std::function<showpol_t> > g_showvec =
                 out << (g_color ? vt100::BOLD : "") << rate/1000 << "K/sec" << vt100::RESET; 
             else 
                 out << (g_color ? vt100::BOLD : "") << rate << "/sec" << vt100::RESET;
-            out << ']';
+            out << ')';
         }
     }
 };
@@ -186,7 +187,7 @@ void signal_handler(int sig)
          g_sigpol++;
          break;
     case SIGTSTP:
-         g_diffmode.store(g_diffmode.load() ? false : true);
+         g_diffmode = (g_diffmode ? 0 : 1);
          break;
     case SIGWINCH:
          std::cout << vt100::CLEAR;
@@ -586,7 +587,7 @@ try
         }
         if (!std::strcmp(*opt, "-d") || !std::strcmp(*opt, "--diff"))
         {
-            g_diffmode.store(true);
+            g_diffmode = 1;
             continue;
         }
         if (!std::strcmp(*opt, "-i") || !std::strcmp(*opt, "--interval"))
