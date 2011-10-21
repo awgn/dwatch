@@ -93,7 +93,7 @@ int g_tab = 0;
 
 std::function<bool(char c)> g_euristic; 
 
-std::chrono::seconds g_interval(1);
+std::chrono::milliseconds g_interval(1000);
 
 bool g_color = false;
 bool g_daemon = false;
@@ -134,7 +134,7 @@ std::vector< std::function<showpol_t> > g_showvec =
 
     [](std::ostream &out, int64_t val, bool) 
     {
-        auto rate = static_cast<double>(val)/g_interval.count();
+        auto rate = static_cast<double>(val)*1000/g_interval.count();
         if (rate != 0.0) {
             out << '(';
             if (rate > 1000000000)
@@ -428,7 +428,7 @@ main_loop(const std::vector<std::string>& commands)
         // display the header: 
         //
 
-        std::cout << vt100::HOME << vt100::ELINE << "Every " << g_interval.count() << "s: ";  
+        std::cout << vt100::HOME << vt100::ELINE << "Every " << g_interval.count() << "ms: ";  
         std::for_each(commands.begin(), commands.end(), [](const std::string &c) {
                       std::cout << "'" << c << "' ";
                       });
@@ -592,7 +592,7 @@ try
         }
         if (!std::strcmp(*opt, "-i") || !std::strcmp(*opt, "--interval"))
         {
-            g_interval = std::chrono::seconds(atoi(*++opt));
+            g_interval = std::chrono::milliseconds(atoi(*++opt));
             continue;
         }
         if (!std::strcmp(*opt, "-t") || !std::strcmp(*opt, "--trace"))
