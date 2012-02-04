@@ -72,11 +72,8 @@ namespace vt100
     eline(std::basic_ostream<CharT, Traits> &out, size_t pos, size_t n = 0) 
     {
         out << "\r\E[" << pos << 'C'; 
-        
         if (n == 0)
-        {
             return out << ELINE;
-        }
 
         n = std::min(n, winsize().second - pos);
         for(size_t i = 0; i < n; ++i)
@@ -84,30 +81,21 @@ namespace vt100
         
         return out << "\r\E[" << pos << 'C'; 
     }
-
 }
-
-
-int g_seconds = std::numeric_limits<int>::max();
-int g_tab = 0;
-
-std::function<bool(char c)> g_euristic; 
-
-std::chrono::milliseconds g_interval(1000);
-
-bool g_color = false;
-bool g_daemon = false;
-
-std::string    g_datafile;
-
-std::ofstream  g_data;
 
 typedef void(showpol_t)(std::ostream &, int64_t, bool);
 
-std::function<showpol_t> g_showpol;
-
+std::function<bool(char c)> g_euristic; 
+int                         g_seconds = std::numeric_limits<int>::max();
+int                         g_tab;
+bool                        g_color;
+bool                        g_daemon;
+std::string                 g_datafile;
+std::ofstream               g_data;
+std::function<showpol_t>    g_showpol;
 volatile std::sig_atomic_t  g_sigpol;
-volatile std::sig_atomic_t  g_diffmode = 0; 
+volatile std::sig_atomic_t  g_diffmode; 
+std::chrono::milliseconds   g_interval(1000);
 
 
 std::vector< std::function<showpol_t> > g_showvec = 
@@ -164,7 +152,7 @@ struct default_euristic
     {
         auto issep = [&](char a) 
         {
-            for(char x : xs)
+            for(auto x : xs)
             {
                 if (a == x)
                     return true;
@@ -275,7 +263,7 @@ complement(const std::vector<range_type> &xs, size_t size)
     std::vector<range_type> ret;
     size_t first = 0;
 
-    for(const range_type &x : xs)
+    for(auto &x : xs)
     {
         ret.push_back(std::make_pair(first, x.first));
         first = x.second;
@@ -291,7 +279,7 @@ complement(const std::vector<range_type> &xs, size_t size)
 inline bool 
 in_range(std::string::size_type i, const std::vector<range_type> &xs)
 {
-    for(const range_type &x : xs)
+    for(auto &x : xs)
     {
         if (i < x.first)
             return false;
@@ -306,7 +294,7 @@ inline std::vector<int64_t>
 get_mutables(const char *str, const std::vector<range_type> &xs)
 {
     std::vector<int64_t> ret;
-    for(const range_type &x : xs)
+    for(auto &x : xs)
     {    
         ret.push_back(stoll(std::string(str + x.first, str + x.second)));
     }
@@ -318,7 +306,7 @@ inline std::vector<std::string>
 get_immutables(const char *str, const std::vector<range_type> &xs)
 {
     std::vector<std::string> ret;
-    for(const range_type &x : complement(xs, strlen(str)))
+    for(auto &x : complement(xs, strlen(str)))
     {
         ret.push_back(std::string(str + x.first, str + x.second));
     };
@@ -449,7 +437,7 @@ main_loop(const std::vector<std::string>& commands)
         //        
         
         size_t i = 0, j = -1;
-        for(const std::string &command : commands)
+        for(auto const &command : commands)
         {
             j++;
 
@@ -512,7 +500,6 @@ main_loop(const std::vector<std::string>& commands)
             ::free(line);
             ::fclose(fp);
             
-
             // wait for termination 
 
             while (::waitpid(pid, &status, 0) == -1) {
