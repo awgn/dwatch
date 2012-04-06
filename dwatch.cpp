@@ -471,7 +471,7 @@ main_loop(const std::vector<std::string>& commands)
             
             FILE * fp = ::fdopen(fds[0], "r");
             char *line = NULL;  
-            size_t nbyte, len = 0;
+            ssize_t nbyte; size_t len = 0;
             
             while( (nbyte = ::getline(&line, &len, fp)) != -1 )
             {   
@@ -539,8 +539,6 @@ void usage()
         "       [-e|--euristic level] [-d|--diff] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
 }
 
-
-#ifndef DWATCH_LIB
 
 int
 main(int argc, char *argv[])
@@ -642,4 +640,3 @@ catch(std::exception &e)
     std::cerr << __progname << ": " << e.what() << std::endl;
 }
 
-#endif
