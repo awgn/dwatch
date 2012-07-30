@@ -150,7 +150,7 @@ struct default_euristic
 
     bool operator()(char c) const
     {
-        auto issep = [&](char a) 
+        auto issep = [&](char a) -> bool 
         {
             for(auto x : xs)
             {
