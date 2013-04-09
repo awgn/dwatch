@@ -40,6 +40,7 @@
 
 extern const char *__progname;
 
+
 typedef std::pair<size_t, size_t>  range_type;
 
 
@@ -83,9 +84,10 @@ namespace vt100
     }
 }
 
+
 typedef void(showpol_t)(std::ostream &, int64_t, bool);
 
-std::function<bool(char c)> g_euristic; 
+std::function<bool(char c)> g_heuristic; 
 int                         g_seconds = std::numeric_limits<int>::max();
 int                         g_tab;
 bool                        g_color;
@@ -139,12 +141,12 @@ std::vector< std::function<showpol_t> > g_showvec =
 };
 
 
-//////////////// defaut euristic /////////////////
+//////////////// default heuristic /////////////////
 
 
-struct default_euristic
+struct default_heuristic
 {
-    default_euristic(const char *sep)
+    default_heuristic(const char *sep)
     : xs(sep)
     {}
 
@@ -204,7 +206,7 @@ get_ranges(const char *str)
         {
         case state::none:
             {
-                if (g_euristic(*c))
+                if (g_heuristic(*c))
                     local_state = state::space;
             } break;
         case state::space:
@@ -216,7 +218,7 @@ get_ranges(const char *str)
                     local_state = state::sign;
                     local_point.first = local_index;
                 }
-                else if (!g_euristic(*c)) {
+                else if (!g_heuristic(*c)) {
                     local_state = state::none;
                 }    
             } break;        
@@ -228,13 +230,13 @@ get_ranges(const char *str)
                     local_state = state::sign;
                     local_point.first = local_index;
                 }
-                else if (!g_euristic(*c)) {
+                else if (!g_heuristic(*c)) {
                     local_state = state::none;
                 }    
             } break;
         case state::digit:
             {
-                if (g_euristic(*c)) {
+                if (g_heuristic(*c)) {
                     local_point.second = local_index;
                     local_vector.push_back(local_point);
                     local_state = state::space;
@@ -460,7 +462,7 @@ main_loop(const std::vector<std::string>& commands)
                 ::close(fds[0]); // for reading
                 ::close(1);
                 ::dup2(fds[1], 1);
-                ::execl("/bin/sh", "sh", "-c", command.c_str(), NULL);
+                ::execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
                 ::_exit(127);
             }
                 
@@ -468,9 +470,8 @@ main_loop(const std::vector<std::string>& commands)
 
             ::close(fds[1]); // for writing 
 
-            
             FILE * fp = ::fdopen(fds[0], "r");
-            char *line = NULL;  
+            char *line = nullptr;  
             ssize_t nbyte; size_t len = 0;
             
             while( (nbyte = ::getline(&line, &len, fp)) != -1 )
@@ -536,7 +537,8 @@ void usage()
 {
     std::cout << "usage: " << __progname << 
         " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out]\n"
-        "       [-e|--euristic level] [-d|--diff] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
+        "       [-e|--heuristic level] [-d|--diff] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
+    _Exit(0);
 }
 
 
@@ -544,69 +546,73 @@ int
 main(int argc, char *argv[])
 try
 {
-    if (argc < 2) {
+    if (argc < 2) 
         usage();
-        return 0;
-    }
     
     char **opt = &argv[1];
+
+    auto is_opt = [](const char *arg, const char *opt, const char *opt2) 
+    {
+        return std::strcmp(arg, opt) == 0 || std::strcmp(arg, opt2) == 0;
+    };
+
 
     // parse command line option...
     //
 
     for ( ; opt != (argv + argc) ; opt++)
     {
-        if (!std::strcmp(*opt, "-h") || !std::strcmp(*opt, "--help"))
+        if (is_opt(*opt, "-h", "--help"))
         {
             usage(); return 0;
         }
-        if (!std::strcmp(*opt, "-n"))
+        if (is_opt(*opt, "-n", ""))
         {
             g_seconds = atoi(*++opt);
             continue;
         }
-        if (!std::strcmp(*opt, "-c") || !std::strcmp(*opt, "--color"))
+        if (is_opt(*opt, "-c", "--color"))
         {
             g_color = true;
             continue;
         }
-        if (!std::strcmp(*opt, "-d") || !std::strcmp(*opt, "--diff"))
+        if (is_opt(*opt, "-d", "--diff"))
         {
             g_diffmode = 1;
             continue;
         }
-        if (!std::strcmp(*opt, "-i") || !std::strcmp(*opt, "--interval"))
+        if (is_opt(*opt, "-i", "--interval"))
         {
             g_interval = std::chrono::milliseconds(atoi(*++opt));
             continue;
         }
-        if (!std::strcmp(*opt, "-t") || !std::strcmp(*opt, "--trace"))
+        if (is_opt(*opt, "-t", "--trace"))
         {
             g_datafile.assign(*++opt);
             continue;
         }
-        if (!std::strcmp(*opt, "--tab"))
+        if (is_opt(*opt, "--tab", ""))
         {
             g_tab = std::atoi(*++opt);
             continue;
         }
-        if (!std::strcmp(*opt, "--daemon"))
+        if (is_opt(*opt, "", "--daemon"))
         {
             g_daemon = true;
             continue;
         }
-        if (!std::strcmp(*opt, "-e") || !std::strcmp(*opt, "--euristic"))
+        if (is_opt(*opt, "-e", "--heuristic"))
         {
             switch (atoi(*++opt))
             {
             case 0: 
-                    g_euristic = default_euristic(",:;()"); 
+                    g_heuristic = default_heuristic(",:;()"); 
                     break;
             case 1:
-                    g_euristic = default_euristic(".,:;(){}[]="); 
+                    g_heuristic = default_heuristic(".,:;(){}[]="); 
             break;
             default:
-                throw std::runtime_error("unknown euristic");
+                throw std::runtime_error("unknown heuristic");
             }
             continue;
         }
@@ -617,8 +623,8 @@ try
     if (opt == (argv + argc))
         throw std::runtime_error("missing argument");
     
-    if (!g_euristic)
-        g_euristic = default_euristic(",:;()"); 
+    if (!g_heuristic)
+        g_heuristic = default_heuristic(",:;()"); 
 
     if ((signal(SIGQUIT, signal_handler) == SIG_ERR) ||
         (signal(SIGTSTP, signal_handler) == SIG_ERR) ||
