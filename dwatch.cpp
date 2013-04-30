@@ -34,17 +34,16 @@
 #include <algorithm>
 #include <stdexcept>
 #include <csignal>
+#include <system_error>
 
 #include <thread>
 #include <unordered_map>
+
 
 extern const char *__progname;
 
 
 typedef std::pair<size_t, size_t>  range_type;
-
-
-//////////////// global data /////////////////
 
 
 namespace vt100 
@@ -88,13 +87,13 @@ namespace vt100
 typedef void(showpol_t)(std::ostream &, int64_t, bool);
 
 std::function<bool(char c)> g_heuristic; 
+std::function<showpol_t>    g_showpol;
 int                         g_seconds = std::numeric_limits<int>::max();
-int                         g_tab;
+size_t                      g_tab;
 bool                        g_color;
 bool                        g_daemon;
 std::string                 g_datafile;
 std::ofstream               g_data;
-std::function<showpol_t>    g_showpol;
 volatile std::sig_atomic_t  g_sigpol;
 volatile std::sig_atomic_t  g_diffmode; 
 std::chrono::milliseconds   g_interval(1000);
@@ -120,12 +119,12 @@ std::vector< std::function<showpol_t> > g_showvec =
         }
     }, 
 
-    /* policy suitable for diffmode */
+    // policy suitable for diffmode 
 
     [](std::ostream &out, int64_t val, bool) 
     {
-        auto rate = static_cast<double>(val)*1000/g_interval.count();
-        if (rate != 0.0) {
+        auto rate = static_cast<long double>(val)*1000/g_interval.count();
+        if (rate > 0.0) {
             out << '(';
             if (rate > 1000000000)
                 out << (g_color ? vt100::BOLD : "") << rate/1000000000 << "G/sec" << vt100::RESET; 
@@ -197,8 +196,7 @@ get_ranges(const char *str)
     range_type local_point;
     std::string::size_type local_index = 0;
 
-    // parse line...
-    //
+    // parse a line...
 
     for(const char *c = str; *c != '\0'; c++)
     {
@@ -265,15 +263,17 @@ complement(const std::vector<range_type> &xs, size_t size)
     std::vector<range_type> ret;
     size_t first = 0;
 
+    ret.reserve(xs.size() + 1);
     for(auto &x : xs)
     {
         ret.push_back(std::make_pair(first, x.first));
         first = x.second;
     }
+
     ret.push_back(std::make_pair(first, size));
 
-    ret.erase(std::remove_if(ret.begin(), ret.end(), 
-             [](const range_type &r) { return r.first == r.second; }), ret.end());
+    ret.erase(std::remove_if(std::begin(ret), std::end(ret), 
+                [](const range_type &r) { return r.first == r.second; }), std::end(ret));
     return ret;
 }
 
@@ -296,6 +296,7 @@ inline std::vector<int64_t>
 get_mutables(const char *str, const std::vector<range_type> &xs)
 {
     std::vector<int64_t> ret;
+    ret.reserve(xs.size());
     for(auto &x : xs)
     {    
         ret.push_back(stoll(std::string(str + x.first, str + x.second)));
@@ -308,6 +309,7 @@ inline std::vector<std::string>
 get_immutables(const char *str, const std::vector<range_type> &xs)
 {
     std::vector<std::string> ret;
+    ret.reserve(xs.size());
     for(auto &x : complement(xs, strlen(str)))
     {
         ret.push_back(std::string(str + x.first, str + x.second));
@@ -319,15 +321,17 @@ get_immutables(const char *str, const std::vector<range_type> &xs)
 std::pair<uint32_t, std::string>
 hash_line(const char *s, const std::vector<range_type> &xs)
 {
-    const char *s_end = s + strlen(s);
+    auto size = strlen(s);
+
     std::string str;
-    str.reserve(s_end-s);
+    str.reserve(size);
 
     size_t index = 0;
-    std::for_each(s, s_end, [&](char c) { 
+    std::for_each(s, s+size, [&](char c) { 
                   if (!in_range(index++, xs) && !isdigit(c)) 
                       str.push_back(c); 
                   }); 
+
     str.erase(str.size()-1,1);
     return std::make_pair(std::hash<std::string>()(str),str);
 }
@@ -365,22 +369,21 @@ process_line(size_t n, size_t col, const char *line)
 
     auto ranges = get_ranges(line);
     auto values = get_mutables(line, ranges);
-    auto imm = get_immutables(line, ranges);
-    auto h = hash_line(line, ranges);
+    auto imm    = get_immutables(line, ranges);
+    auto h      = hash_line(line, ranges);
 
     decltype(values) diff(values.size());
     
     auto it = dmap.find(n);
-    if (it != dmap.end())
+    if (it != std::end(dmap))
     {
-        std::transform(values.begin(), values.end(),
+        std::transform(std::begin(values), std::end(values),
                        std::get<2>(it->second).begin(), diff.begin(), std::minus<int64_t>());
     }
     
     dmap[n] = std::make_tuple(h.first, ranges, values); 
     
     // show this line...
-    //
     
     auto &xs = g_diffmode ? diff : values;
 
@@ -388,6 +391,7 @@ process_line(size_t n, size_t col, const char *line)
     
     vt100::eline(std::cout, col, g_tab); 
     show_line(imm, values, xs, ranges);
+
     std::cout << '\n';
 
     return std::make_pair(values, diff);
@@ -398,62 +402,60 @@ int
 main_loop(const std::vector<std::string>& commands)
 {
     // open data file...
+    
     if (!g_datafile.empty()) {
         g_data.open(g_datafile.c_str());
         if (!g_data.is_open())
-            throw std::runtime_error("ofstream::open");
+            throw std::system_error(errno, std::generic_category(), "ofstream::open");
     }
 
     std::cout << vt100::CLEAR;
 
     for(int n=0; n < g_seconds; ++n)
     {
-        size_t show_index = (g_sigpol % (g_diffmode ? g_showvec.size() : 2));
+        size_t show_index = static_cast<size_t>(g_sigpol) % (g_diffmode ? g_showvec.size() : 2);
 
         // set the display policy
-        //
         
         g_showpol = g_showvec[show_index];
 
         // display the header: 
-        //
 
         std::cout << vt100::HOME << vt100::ELINE << "Every " << g_interval.count() << "ms: ";  
-        std::for_each(commands.begin(), commands.end(), [](const std::string &c) {
+        std::for_each(std::begin(commands), std::end(commands), [](const std::string &c) {
                       std::cout << "'" << c << "' ";
                       });
+
         std::cout << "diff:" << (g_color ? vt100::BOLD : "") << (g_diffmode ? "ON " : "OFF ") << vt100::RESET <<
             "showmode:" << (g_color ? vt100::BOLD : "") << show_index << vt100::RESET << " ";
 
         if (g_data.is_open())
             std::cout << "trace:" << g_datafile;
+
         std::cout << '\n'; 
         
         // dump the timestamp on trace output
-        //
 
         if (g_data.is_open())
             g_data << n << '\t';
 
         // dump output of different commands...
-        //        
         
-        size_t i = 0, j = -1;
+        size_t i = 0, j = 0;
+        
         for(auto const &command : commands)
         {
-            j++;
-
             if (g_tab) {
                 std::cout << vt100::HOME << vt100::DOWN;
             }
 
             int status, fds[2];
             if (::pipe(fds) < 0)
-                throw std::runtime_error(std::string("pipe: ").append(strerror(errno)));
+                throw std::system_error(errno, std::generic_category(), "pipe");
 
             pid_t pid = fork();
             if (pid == -1)
-                throw std::runtime_error(std::string("fork: ").append(strerror(errno)));
+                throw std::system_error(errno, std::generic_category(), "fork");
 
             if (pid == 0) {  
                 
@@ -495,7 +497,7 @@ main_loop(const std::vector<std::string>& commands)
             }
 
             // flush the stdout...
-            //
+            
             std::cout << vt100::EDOWN << std::flush;
 
             ::free(line);
@@ -505,7 +507,7 @@ main_loop(const std::vector<std::string>& commands)
 
             while (::waitpid(pid, &status, 0) == -1) {
                 if (errno != EINTR) {     
-                    throw std::runtime_error("waitpid");
+                    throw std::system_error(errno, std::generic_category(), "waitpid");
                 }
             }
 
@@ -516,10 +518,11 @@ main_loop(const std::vector<std::string>& commands)
                  WEXITSTATUS(status) == 126 ||
                  WEXITSTATUS(status) == 127 )
                 throw std::runtime_error(std::string("exec: ") + command + std::string(" : error!"));
+        
+            j++; 
         }
         
         // dump new-line on data...
-        //
             
         if (g_data.is_open())
             g_data << std::endl;
@@ -593,7 +596,7 @@ try
         }
         if (is_opt(*opt, "--tab", ""))
         {
-            g_tab = std::atoi(*++opt);
+            g_tab = strtoul(*++opt, nullptr, 0);
             continue;
         }
         if (is_opt(*opt, "", "--daemon"))
