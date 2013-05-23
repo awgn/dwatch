@@ -92,6 +92,7 @@ int                         g_seconds = std::numeric_limits<int>::max();
 size_t                      g_tab;
 bool                        g_color;
 bool                        g_daemon;
+bool                        g_banner = true;
 std::string                 g_datafile;
 std::ofstream               g_data;
 volatile std::sig_atomic_t  g_sigpol;
@@ -411,6 +412,8 @@ main_loop(const std::vector<std::string>& commands)
 
     std::cout << vt100::CLEAR;
 
+    auto now = std::chrono::system_clock::now();
+
     for(int n=0; n < g_seconds; ++n)
     {
         size_t show_index = static_cast<size_t>(g_sigpol) % (g_diffmode ? g_showvec.size() : 2);
@@ -421,19 +424,24 @@ main_loop(const std::vector<std::string>& commands)
 
         // display the header: 
 
-        std::cout << vt100::HOME << vt100::ELINE << "Every " << g_interval.count() << "ms: ";  
-        std::for_each(std::begin(commands), std::end(commands), [](const std::string &c) {
-                      std::cout << "'" << c << "' ";
-                      });
+        std::cout << vt100::HOME << vt100::ELINE;
 
-        std::cout << "diff:" << (g_color ? vt100::BOLD : "") << (g_diffmode ? "ON " : "OFF ") << vt100::RESET <<
-            "showmode:" << (g_color ? vt100::BOLD : "") << show_index << vt100::RESET << " ";
+        if (g_banner)
+        {
+            std::cout << "Every " << g_interval.count() << "ms: ";  
+            std::for_each(std::begin(commands), std::end(commands), [](const std::string &c) {
+                          std::cout << "'" << c << "' ";
+                          });
 
-        if (g_data.is_open())
-            std::cout << "trace:" << g_datafile;
+            std::cout << "diff:" << (g_color ? vt100::BOLD : "") << (g_diffmode ? "ON " : "OFF ") << vt100::RESET <<
+                "showmode:" << (g_color ? vt100::BOLD : "") << show_index << vt100::RESET << " ";
 
-        std::cout << '\n'; 
-        
+            if (g_data.is_open())
+                std::cout << "trace:" << g_datafile;
+
+            std::cout << '\n'; 
+        }
+
         // dump the timestamp on trace output
 
         if (g_data.is_open())
@@ -529,7 +537,9 @@ main_loop(const std::vector<std::string>& commands)
         
         g_showpol(std::cout, 0, /* reset */ true); 
 
-        std::this_thread::sleep_for(g_interval);
+        now += g_interval;
+
+        std::this_thread::sleep_until(now);
     }
 
     return 0;
@@ -582,6 +592,11 @@ try
         if (is_opt(*opt, "-d", "--diff"))
         {
             g_diffmode = 1;
+            continue;
+        }
+        if (is_opt(*opt, "-x", "--suppress-banner"))
+        {
+            g_banner = false;
             continue;
         }
         if (is_opt(*opt, "-i", "--interval"))
