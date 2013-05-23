@@ -549,7 +549,7 @@ main_loop(const std::vector<std::string>& commands)
 void usage()
 {
     std::cout << "usage: " << __progname << 
-        " [-h] [-c|--color] [-i|--interval sec] [-t|--trace trace.out]\n"
+        " [-h] [-c|--color] [-i|--interval sec] [-x|--no-banner] [-t|--trace trace.out]\n"
         "       [-e|--heuristic level] [-d|--diff] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
     _Exit(0);
 }
@@ -594,7 +594,7 @@ try
             g_diffmode = 1;
             continue;
         }
-        if (is_opt(*opt, "-x", "--suppress-banner"))
+        if (is_opt(*opt, "-x", "--no-banner"))
         {
             g_banner = false;
             continue;
