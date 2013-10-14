@@ -328,13 +328,18 @@ hash_line(const char *s, const std::vector<range_type> &xs)
     str.reserve(size);
 
     size_t index = 0;
+
     std::for_each(s, s+size, [&](char c) { 
                   if (!in_range(index++, xs) && !isdigit(c)) 
                       str.push_back(c); 
                   }); 
 
-    str.erase(str.size()-1,1);
-    return std::make_pair(std::hash<std::string>()(str),str);
+    if (str.size())
+        str.erase(str.size()-1, 1);
+
+    auto h = std::hash<std::string>()(str);
+
+    return std::make_pair(h, std::move(str));
 }
 
 
