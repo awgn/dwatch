@@ -383,8 +383,13 @@ process_line(size_t n, size_t col, const char *line)
     auto it = dmap.find(n);
     if (it != std::end(dmap))
     {
-        std::transform(std::begin(values), std::end(values),
-                       std::get<2>(it->second).begin(), diff.begin(), std::minus<int64_t>());
+        // make sure the transform is safe...
+        //
+        if (values.size() == std::get<2>(it->second).size())
+        {
+            std::transform(std::begin(values), std::end(values),
+                            std::begin(std::get<2>(it->second)), std::begin(diff), std::minus<int64_t>());
+        }
     }
     
     dmap[n] = std::make_tuple(h.first, ranges, values); 
