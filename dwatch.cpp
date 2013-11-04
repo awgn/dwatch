@@ -343,8 +343,10 @@ hash_line(const char *s, const std::vector<range_type> &xs)
 }
 
 
-void
-show_line(const std::vector<std::string> &i, const std::vector<int64_t> &m, 
+template <typename CharT, typename Traits>
+std::basic_ostream<CharT, Traits> &
+show_line(std::basic_ostream<CharT, Traits> &out,
+          const std::vector<std::string> &i, const std::vector<int64_t> &m, 
           const std::vector<int64_t> &d, std::vector<range_type> &xs)
 {
     auto it = i.cbegin(), it_e = i.cend();
@@ -354,17 +356,19 @@ show_line(const std::vector<std::string> &i, const std::vector<int64_t> &m,
     if (!xs.empty() && xs[0].first == 0) 
         for(; (it != it_e) || (mt != mt_e);)
     {
-        if ( mt != mt_e ) std::cout << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
-        if ( dt != dt_e ) g_showpol(std::cout, *dt++, /* reset */ false);
-        if ( it != it_e ) std::cout << *it++;
+        if ( mt != mt_e ) out << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
+        if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
+        if ( it != it_e ) out << *it++;
     }
     else 
         for(; (it != it_e) || (mt != mt_e);)
     {
-        if ( it != it_e ) std::cout << *it++;
-        if ( mt != mt_e ) std::cout << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
-        if ( dt != dt_e ) g_showpol(std::cout, *dt++, /* reset */ false);
+        if ( it != it_e ) out << *it++;
+        if ( mt != mt_e ) out << (g_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
+        if ( dt != dt_e ) g_showpol(out, *dt++, /* reset */ false);
     }
+
+    return out;
 }   
 
 
@@ -401,9 +405,10 @@ process_line(size_t n, size_t col, const char *line)
     // clear this line, completely or partially
     
     vt100::eline(std::cout, col, g_tab); 
-    show_line(imm, values, xs, ranges);
 
-    std::cout << '\n';
+    show_line(std::cout, imm, values, xs, ranges); 
+
+    std::cout << std::endl;
 
     return std::make_pair(values, diff);
 }
