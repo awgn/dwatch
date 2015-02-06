@@ -403,14 +403,17 @@ process_line(size_t n, size_t col, const char *line)
 
     auto &xs = dwatch_diffmode ? delta : values;
 
-    // clear this line, completely or partially
+    if (!dwatch_drop_zero || std::any_of(std::begin(xs), std::end(xs), [](uint64_t v) { return v != 0; }))
+    {
+        // clear this line, completely or partially
 
-    vt100::eline(std::cout, col, dwatch_tab);
+        vt100::eline(std::cout, col, dwatch_tab);
 
-    // show the line...
+        // show the line...
 
-    show_line(std::cout, strings, values, xs, ranges);
-    std::cout << std::endl;
+        show_line(std::cout, strings, values, xs, ranges);
+        std::cout << std::endl;
+    }
 
     // return the values and delta
 
