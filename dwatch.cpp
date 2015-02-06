@@ -42,10 +42,6 @@
 
 extern const char *__progname;
 
-
-typedef std::pair<size_t, size_t>  range_type;
-
-
 namespace vt100
 {
     const char * const CLEAR = "\E[2J";
@@ -84,62 +80,65 @@ namespace vt100
 }
 
 
-typedef void(showpol_t)(std::ostream &, int64_t, bool);
-
-std::function<bool(char c)> dwatch_heuristic;
-std::function<showpol_t>    dwatch_showpol;
-int                         dwatch_seconds = std::numeric_limits<int>::max();
-size_t                      dwatch_tab;
-bool                        dwatch_color;
-bool                        dwatch_daemon;
-bool                        dwatch_drop_zero;
-bool                        dwatch_banner = true;
-std::string                 dwatch_datafile;
-std::ofstream               dwatch_data;
-volatile std::sig_atomic_t  dwatch_sigpol;
-volatile std::sig_atomic_t  dwatch_diffmode;
-std::chrono::milliseconds   dwatch_interval(1000);
-
-
-std::vector< std::function<showpol_t> > dwatch_showvec =
+namespace dwatch
 {
-    [](std::ostream &out, int64_t, bool reset)
-    {
-        static int counter = 0;
-        if (reset) {
-            counter = 0;
-            return;
-        }
-        out << '[' << (dwatch_color ? vt100::BOLD : "") << ++counter << vt100::RESET << ']';
-    },
+    using show_type  = void(std::ostream &, int64_t, bool);
+    using range_type = std::pair<size_t, size_t>;
 
-    [](std::ostream &out, int64_t val, bool)
+    std::function<bool(char c)> heuristic;
+    std::function<show_type>    shows;
+    int                         seconds = std::numeric_limits<int>::max();
+    size_t                      tab;
+    bool                        color;
+    bool                        daemon;
+    bool                        drop_zero;
+    bool                        banner = true;
+    std::string                 datafile;
+    std::ofstream               data;
+    volatile std::sig_atomic_t  sigpol;
+    volatile std::sig_atomic_t  diffmode;
+    std::chrono::milliseconds   interval(1000);
+
+    std::vector<std::function<show_type>> showvec =
     {
-        if (val != 0 && dwatch_diffmode)
+        [](std::ostream &out, int64_t, bool reset)
         {
-            out << '(' << (dwatch_color ? vt100::BOLD : "") << val << vt100::RESET << ')';
-        }
-    },
+            static int counter = 0;
+            if (reset) {
+                counter = 0;
+                return;
+            }
+            out << '[' << (dwatch::color ? vt100::BOLD : "") << ++counter << vt100::RESET << ']';
+        },
 
-    // policy suitable for diffmode
+        [](std::ostream &out, int64_t val, bool)
+        {
+            if (val != 0 && dwatch::diffmode)
+            {
+                out << '(' << (dwatch::color ? vt100::BOLD : "") << val << vt100::RESET << ')';
+            }
+        },
 
-    [](std::ostream &out, int64_t val, bool)
-    {
-        auto rate = static_cast<long double>(val)*1000/dwatch_interval.count();
-        if (rate > 0.0) {
-            out << '(';
-            if (rate > 1000000000)
-                out << (dwatch_color ? vt100::BOLD : "") << rate/1000000000 << "G/sec" << vt100::RESET;
-            else if (rate > 1000000)
-                out << (dwatch_color ? vt100::BOLD : "") << rate/1000000 << "M/sec" << vt100::RESET;
-            else if (rate > 1000)
-                out << (dwatch_color ? vt100::BOLD : "") << rate/1000 << "K/sec" << vt100::RESET;
-            else
-                out << (dwatch_color ? vt100::BOLD : "") << rate << "/sec" << vt100::RESET;
-            out << ')';
+        // policy suitable for diffmode
+
+        [](std::ostream &out, int64_t val, bool)
+        {
+            auto rate = static_cast<long double>(val)*1000/dwatch::interval.count();
+            if (rate > 0.0) {
+                out << '(';
+                if (rate > 1000000000)
+                    out << (dwatch::color ? vt100::BOLD : "") << rate/1000000000 << "G/sec" << vt100::RESET;
+                else if (rate > 1000000)
+                    out << (dwatch::color ? vt100::BOLD : "") << rate/1000000 << "M/sec" << vt100::RESET;
+                else if (rate > 1000)
+                    out << (dwatch::color ? vt100::BOLD : "") << rate/1000 << "K/sec" << vt100::RESET;
+                else
+                    out << (dwatch::color ? vt100::BOLD : "") << rate << "/sec" << vt100::RESET;
+                out << ')';
+            }
         }
-    }
-};
+    };
+}
 
 
 //////////////// default heuristic /////////////////
@@ -175,10 +174,10 @@ void signal_handler(int sig)
     switch(sig)
     {
     case SIGQUIT:
-         dwatch_sigpol++;
+         dwatch::sigpol++;
          break;
     case SIGTSTP:
-         dwatch_diffmode = (dwatch_diffmode ? 0 : 1);
+         dwatch::diffmode = (dwatch::diffmode ? 0 : 1);
          break;
     case SIGWINCH:
          std::cout << vt100::CLEAR;
@@ -187,15 +186,15 @@ void signal_handler(int sig)
 }
 
 
-std::vector<range_type>
+std::vector<dwatch::range_type>
 get_ranges(const char *str)
 {
-    std::vector<range_type> local_vector;
+    std::vector<dwatch::range_type> local_vector;
 
     enum class state { none, space, sign, digit };
     state local_state = state::space;
 
-    range_type local_point;
+    dwatch::range_type local_point;
     std::string::size_type local_index = 0;
 
     // parse a line...
@@ -206,7 +205,7 @@ get_ranges(const char *str)
         {
         case state::none:
             {
-                if (dwatch_heuristic(*c))
+                if (dwatch::heuristic(*c))
                     local_state = state::space;
             } break;
         case state::space:
@@ -218,7 +217,7 @@ get_ranges(const char *str)
                     local_state = state::sign;
                     local_point.first = local_index;
                 }
-                else if (!dwatch_heuristic(*c)) {
+                else if (!dwatch::heuristic(*c)) {
                     local_state = state::none;
                 }
             } break;
@@ -230,13 +229,13 @@ get_ranges(const char *str)
                     local_state = state::sign;
                     local_point.first = local_index;
                 }
-                else if (!dwatch_heuristic(*c)) {
+                else if (!dwatch::heuristic(*c)) {
                     local_state = state::none;
                 }
             } break;
         case state::digit:
             {
-                if (dwatch_heuristic(*c)) {
+                if (dwatch::heuristic(*c)) {
                     local_point.second = local_index;
                     local_vector.push_back(local_point);
                     local_state = state::space;
@@ -259,10 +258,10 @@ get_ranges(const char *str)
 }
 
 
-std::vector<range_type>
-complement(const std::vector<range_type> &xs, size_t size)
+std::vector<dwatch::range_type>
+complement(const std::vector<dwatch::range_type> &xs, size_t size)
 {
-    std::vector<range_type> ret;
+    std::vector<dwatch::range_type> ret;
     size_t first = 0;
 
     ret.reserve(xs.size() + 1);
@@ -275,13 +274,13 @@ complement(const std::vector<range_type> &xs, size_t size)
     ret.push_back(std::make_pair(first, size));
 
     ret.erase(std::remove_if(std::begin(ret), std::end(ret),
-                [](const range_type &r) { return r.first == r.second; }), std::end(ret));
+                [](const dwatch::range_type &r) { return r.first == r.second; }), std::end(ret));
     return ret;
 }
 
 
 inline bool
-in_range(std::string::size_type i, const std::vector<range_type> &xs)
+in_range(std::string::size_type i, const std::vector<dwatch::range_type> &xs)
 {
     for(auto &x : xs)
     {
@@ -295,7 +294,7 @@ in_range(std::string::size_type i, const std::vector<range_type> &xs)
 
 
 inline std::vector<int64_t>
-get_mutables(const char *str, const std::vector<range_type> &xs)
+get_mutables(const char *str, const std::vector<dwatch::range_type> &xs)
 {
     std::vector<int64_t> ret;
     ret.reserve(xs.size());
@@ -308,7 +307,7 @@ get_mutables(const char *str, const std::vector<range_type> &xs)
 
 
 inline std::vector<std::string>
-get_immutables(const char *str, const std::vector<range_type> &xs)
+get_immutables(const char *str, const std::vector<dwatch::range_type> &xs)
 {
     std::vector<std::string> ret;
     ret.reserve(xs.size());
@@ -321,7 +320,7 @@ get_immutables(const char *str, const std::vector<range_type> &xs)
 
 
 std::pair<uint32_t, std::string>
-hash_line(const char *s, const std::vector<range_type> &xs)
+hash_line(const char *s, const std::vector<dwatch::range_type> &xs)
 {
     auto size = strlen(s);
 
@@ -348,7 +347,7 @@ template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits> &
 show_line(std::basic_ostream<CharT, Traits> &out,
           const std::vector<std::string> &i, const std::vector<int64_t> &m,
-          const std::vector<int64_t> &d, std::vector<range_type> &xs)
+          const std::vector<int64_t> &d, std::vector<dwatch::range_type> &xs)
 {
     auto it = i.cbegin(), it_e = i.cend();
     auto mt = m.cbegin(), mt_e = m.cend();
@@ -357,16 +356,16 @@ show_line(std::basic_ostream<CharT, Traits> &out,
     if (!xs.empty() && xs[0].first == 0)
         for(; (it != it_e) || (mt != mt_e);)
     {
-        if ( mt != mt_e ) out << (dwatch_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
-        if ( dt != dt_e ) dwatch_showpol(out, *dt++, /* reset */ false);
+        if ( mt != mt_e ) out << (dwatch::color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
+        if ( dt != dt_e ) dwatch::shows(out, *dt++, /* reset */ false);
         if ( it != it_e ) out << *it++;
     }
     else
         for(; (it != it_e) || (mt != mt_e);)
     {
         if ( it != it_e ) out << *it++;
-        if ( mt != mt_e ) out << (dwatch_color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
-        if ( dt != dt_e ) dwatch_showpol(out, *dt++, /* reset */ false);
+        if ( mt != mt_e ) out << (dwatch::color ? vt100::BLUE : "") << *mt++ << vt100::RESET;
+        if ( dt != dt_e ) dwatch::shows(out, *dt++, /* reset */ false);
     }
 
     return out;
@@ -376,7 +375,7 @@ show_line(std::basic_ostream<CharT, Traits> &out,
 std::pair< std::vector<int64_t>, std::vector<int64_t> >
 process_line(size_t n, size_t col, const char *line)
 {
-    static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<range_type>, std::vector<int64_t> >> dmap;
+    static std::unordered_map<size_t, std::tuple<uint32_t, std::vector<dwatch::range_type>, std::vector<int64_t> >> dmap;
 
     auto ranges  = get_ranges(line);
     auto strings = get_immutables(line, ranges);
@@ -401,13 +400,13 @@ process_line(size_t n, size_t col, const char *line)
 
     // show this line...
 
-    auto &xs = dwatch_diffmode ? delta : values;
+    auto &xs = dwatch::diffmode ? delta : values;
 
-    if (!dwatch_drop_zero || std::any_of(std::begin(xs), std::end(xs), [](uint64_t v) { return v != 0; }))
+    if (!dwatch::drop_zero || std::any_of(std::begin(xs), std::end(xs), [](uint64_t v) { return v != 0; }))
     {
         // clear this line, completely or partially
 
-        vt100::eline(std::cout, col, dwatch_tab);
+        vt100::eline(std::cout, col, dwatch::tab);
 
         // show the line...
 
@@ -426,9 +425,9 @@ main_loop(const std::vector<std::string>& commands)
 {
     // open data file...
 
-    if (!dwatch_datafile.empty()) {
-        dwatch_data.open(dwatch_datafile.c_str());
-        if (!dwatch_data.is_open())
+    if (!dwatch::datafile.empty()) {
+        dwatch::data.open(dwatch::datafile.c_str());
+        if (!dwatch::data.is_open())
             throw std::system_error(errno, std::generic_category(), "ofstream::open");
     }
 
@@ -436,13 +435,13 @@ main_loop(const std::vector<std::string>& commands)
 
     auto now = std::chrono::system_clock::now();
 
-    for(int n=0; n < dwatch_seconds; ++n)
+    for(int n=0; n < dwatch::seconds; ++n)
     {
-        size_t show_index = static_cast<size_t>(dwatch_sigpol) % (dwatch_diffmode ? dwatch_showvec.size() : 2);
+        size_t show_index = static_cast<size_t>(dwatch::sigpol) % (dwatch::diffmode ? dwatch::showvec.size() : 2);
 
         // set the display policy
 
-        dwatch_showpol = dwatch_showvec[show_index];
+        dwatch::shows = dwatch::showvec[show_index];
 
         // display the header:
 
@@ -450,26 +449,26 @@ main_loop(const std::vector<std::string>& commands)
 
         // display the banner:
 
-        if (dwatch_banner)
+        if (dwatch::banner)
         {
-            std::cout << "Every " << dwatch_interval.count() << "ms: ";
+            std::cout << "Every " << dwatch::interval.count() << "ms: ";
             std::for_each(std::begin(commands), std::end(commands), [](const std::string &c) {
                           std::cout << "'" << c << "' ";
                           });
 
-            std::cout << "diff:" << (dwatch_color ? vt100::BOLD : "") << (dwatch_diffmode ? "ON " : "OFF ") << vt100::RESET <<
-                "showmode:" << (dwatch_color ? vt100::BOLD : "") << show_index << vt100::RESET << " ";
+            std::cout << "diff:" << (dwatch::color ? vt100::BOLD : "") << (dwatch::diffmode ? "ON " : "OFF ") << vt100::RESET <<
+                "showmode:" << (dwatch::color ? vt100::BOLD : "") << show_index << vt100::RESET << " ";
 
-            if (dwatch_data.is_open())
-                std::cout << "trace:" << dwatch_datafile;
+            if (dwatch::data.is_open())
+                std::cout << "trace:" << dwatch::datafile;
 
             std::cout << '\n';
         }
 
         // dump the timestamp on trace output
 
-        if (dwatch_data.is_open())
-            dwatch_data << n << '\t';
+        if (dwatch::data.is_open())
+            dwatch::data << n << '\t';
 
         // dump output of different commands...
 
@@ -477,7 +476,7 @@ main_loop(const std::vector<std::string>& commands)
 
         for(auto const &command : commands)
         {
-            if (dwatch_tab) {
+            if (dwatch::tab) {
                 std::cout << vt100::HOME << vt100::DOWN;
             }
 
@@ -516,15 +515,15 @@ main_loop(const std::vector<std::string>& commands)
 
                 // process and show this line...
 
-                auto data = process_line(i++, dwatch_tab *j, line);
+                auto data = process_line(i++, dwatch::tab *j, line);
 
                 // dump to datafile if open...
 
-                if (dwatch_data.is_open()) {
-                    auto & xs = dwatch_diffmode ? data.second : data.first;
+                if (dwatch::data.is_open()) {
+                    auto & xs = dwatch::diffmode ? data.second : data.first;
                     for(int64_t x : xs)
                     {
-                        dwatch_data << x << '\t';
+                        dwatch::data << x << '\t';
                     }
                 }
             }
@@ -557,12 +556,12 @@ main_loop(const std::vector<std::string>& commands)
 
         // dump new-line on data...
 
-        if (dwatch_data.is_open())
-            dwatch_data << std::endl;
+        if (dwatch::data.is_open())
+            dwatch::data << std::endl;
 
-        dwatch_showpol(std::cout, 0, /* reset */ true);
+        dwatch::shows(std::cout, 0, /* reset */ true);
 
-        now += dwatch_interval;
+        now += dwatch::interval;
 
         std::this_thread::sleep_until(now);
     }
@@ -605,47 +604,47 @@ try
         }
         if (is_opt(*opt, "-n", ""))
         {
-            dwatch_seconds = atoi(*++opt);
+            dwatch::seconds = atoi(*++opt);
             continue;
         }
         if (is_opt(*opt, "-c", "--color"))
         {
-            dwatch_color = true;
+            dwatch::color = true;
             continue;
         }
         if (is_opt(*opt, "-d", "--diff"))
         {
-            dwatch_diffmode = 1;
+            dwatch::diffmode = 1;
             continue;
         }
         if (is_opt(*opt, "-x", "--no-banner"))
         {
-            dwatch_banner = false;
+            dwatch::banner = false;
             continue;
         }
         if (is_opt(*opt, "-z", "--drop-zero"))
         {
-            dwatch_drop_zero = true;
+            dwatch::drop_zero = true;
             continue;
         }
         if (is_opt(*opt, "-i", "--interval"))
         {
-            dwatch_interval = std::chrono::milliseconds(atoi(*++opt));
+            dwatch::interval = std::chrono::milliseconds(atoi(*++opt));
             continue;
         }
         if (is_opt(*opt, "-t", "--trace"))
         {
-            dwatch_datafile.assign(*++opt);
+            dwatch::datafile.assign(*++opt);
             continue;
         }
         if (is_opt(*opt, "--tab", ""))
         {
-            dwatch_tab = strtoul(*++opt, nullptr, 0);
+            dwatch::tab = strtoul(*++opt, nullptr, 0);
             continue;
         }
         if (is_opt(*opt, "", "--daemon"))
         {
-            dwatch_daemon = true;
+            dwatch::daemon = true;
             continue;
         }
         if (is_opt(*opt, "-e", "--heuristic"))
@@ -653,10 +652,10 @@ try
             switch (atoi(*++opt))
             {
             case 0:
-                    dwatch_heuristic = default_heuristic(",:;()");
+                    dwatch::heuristic = default_heuristic(",:;()");
                     break;
             case 1:
-                    dwatch_heuristic = default_heuristic(".,:;(){}[]=");
+                    dwatch::heuristic = default_heuristic(".,:;(){}[]=");
             break;
             default:
                 throw std::runtime_error("unknown heuristic");
@@ -670,8 +669,8 @@ try
     if (opt == (argv + argc))
         throw std::runtime_error("missing argument");
 
-    if (!dwatch_heuristic)
-        dwatch_heuristic = default_heuristic(",:;()");
+    if (!dwatch::heuristic)
+        dwatch::heuristic = default_heuristic(",:;()");
 
     if ((signal(SIGQUIT, signal_handler) == SIG_ERR) ||
         (signal(SIGTSTP, signal_handler) == SIG_ERR) ||
@@ -679,10 +678,10 @@ try
        )
         throw std::runtime_error("signal");
 
-    if (dwatch_daemon && dwatch_datafile.empty())
+    if (dwatch::daemon && dwatch::datafile.empty())
         throw std::runtime_error("--daemon option meaningless without --trace");
 
-    if (dwatch_daemon) daemon(1,0);
+    if (dwatch::daemon) daemon(1,0);
 
     std::vector<std::string> commands(opt, argv+argc);
 
