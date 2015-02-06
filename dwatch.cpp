@@ -92,6 +92,7 @@ int                         dwatch_seconds = std::numeric_limits<int>::max();
 size_t                      dwatch_tab;
 bool                        dwatch_color;
 bool                        dwatch_daemon;
+bool                        dwatch_drop_zero;
 bool                        dwatch_banner = true;
 std::string                 dwatch_datafile;
 std::ofstream               dwatch_data;
@@ -571,7 +572,7 @@ void usage()
 {
     std::cout << "usage: " << __progname <<
         " [-h] [-c|--color] [-i|--interval sec] [-x|--no-banner] [-t|--trace trace.out]\n"
-        "       [-e|--heuristic level] [-d|--diff] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
+        "       [-e|--heuristic level] [-d|--diff] [-z|--drop-zero] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
     _Exit(0);
 }
 
@@ -617,6 +618,11 @@ try
         if (is_opt(*opt, "-x", "--no-banner"))
         {
             dwatch_banner = false;
+            continue;
+        }
+        if (is_opt(*opt, "-z", "--drop-zero"))
+        {
+            dwatch_drop_zero = true;
             continue;
         }
         if (is_opt(*opt, "-i", "--interval"))
