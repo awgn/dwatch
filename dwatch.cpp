@@ -573,7 +573,7 @@ main_loop(const std::vector<std::string>& commands)
 void usage()
 {
     std::cout << "usage: " << __progname <<
-        " [-h] [-c|--color] [-i|--interval sec] [-x|--no-banner] [-t|--trace trace.out]\n"
+        " [-h] [-c|--color] [-i|--interval msec] [-x|--no-banner] [-t|--trace trace.out]\n"
         "       [-e|--heuristic level] [-d|--diff] [-z|--drop-zero] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
     _Exit(0);
 }
