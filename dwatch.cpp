@@ -99,7 +99,7 @@ namespace dwatch
     bool                        banner = true;
     std::string                 datafile;
     std::ofstream               data;
-    volatile std::sig_atomic_t  sigpol;
+    volatile std::sig_atomic_t  sigpol = -1;
     volatile std::sig_atomic_t  diffmode;
     std::chrono::milliseconds   interval(1000);
 
@@ -633,6 +633,19 @@ try
         if (is_opt(*opt, "-d", "--diff"))
         {
             dwatch::diffmode = 1;
+            dwatch::sigpol++;
+            continue;
+        }
+        if (is_opt(*opt, "-dd"))
+        {
+            dwatch::diffmode = 1;
+            dwatch::sigpol+=2;
+            continue;
+        }
+        if (is_opt(*opt, "-ddd"))
+        {
+            dwatch::diffmode = 1;
+            dwatch::sigpol+=3;
             continue;
         }
         if (is_opt(*opt, "-x", "--no-banner"))
@@ -670,10 +683,10 @@ try
             switch (atoi(*++opt))
             {
             case 0:
-                    dwatch::heuristic = default_heuristic(",:;()");
+                    dwatch::heuristic = default_heuristic(",:;()'\"");
                     break;
             case 1:
-                    dwatch::heuristic = default_heuristic(".,:;(){}[]=");
+                    dwatch::heuristic = default_heuristic(".,:;(){}[]='\"");
             break;
             default:
                 throw std::runtime_error("unknown heuristic");
