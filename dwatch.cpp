@@ -180,14 +180,15 @@ namespace dwatch
         [](std::ostream &out, int64_t, int64_t diff, bool rst)
         {
             if (rst) return;
-            out << vt100::red() << vt100::bold() << pretty(diff) << vt100::reset();
+            auto rate = static_cast<double>(diff*1000000)/option::interval.count();
+            out << vt100::red() << vt100::bold() << pretty(rate) << vt100::reset();
         },
 
         [](std::ostream &out, int64_t val, int64_t diff, bool rst)
         {
             if (rst) return;
 
-            auto rate = static_cast<double>(diff)*1000000/option::interval.count();
+            auto rate = static_cast<double>(diff*1000000)/option::interval.count();
             out << vt100::blue() << val << vt100::reset();
 
             if (rate > 0.0)
@@ -536,7 +537,7 @@ main_loop(std::vector<std::string> const & commands)
 
             out <<  "diff:"      << vt100::bold() << (option::diffmode ? "ON " : "OFF ")                   << vt100::reset() <<
                     "showmode:"  << vt100::bold() << show_index                                            << vt100::reset() << " " <<
-                    "heuristic:" << vt100::bold() << dwatch::heuristic.target<heuristic_parser>()->idx()   << vt100::reset() << " ";
+                    "heuristic:" << vt100::bold() << dwatch::heuristic.target<heuristic_parser>()->idx()   << vt100::reset() << " " << std::endl;
 
             if (option::data.is_open())
                 out << "trace:" << option::datafile << " ";
@@ -550,8 +551,9 @@ main_loop(std::vector<std::string> const & commands)
         // dump output of different commands...
 
         size_t i = 0, j = 0;
-
-        auto now = std::chrono::system_clock::time_point{};
+                    
+        auto now = std::chrono::system_clock::now();
+        option::interval = std::chrono::duration_cast<std::chrono::microseconds>(now - prev);
 
         for(auto const &command : commands)
         {
@@ -589,15 +591,6 @@ main_loop(std::vector<std::string> const & commands)
 
             while( (nbyte = ::getline(&line, &len, fp)) != -1 )
             {
-                if (now.time_since_epoch().count() == 0)
-                {
-                    now = std::chrono::system_clock::now();
-                    option::interval = std::chrono::duration_cast<std::chrono::microseconds>(now - prev);
-
-                    if (option::banner)
-                        out << "(real interval: " << option::interval.count() << "us)" << std::endl;
-                }
-
                 // replace '\n' with '\0'...
 
                 line[nbyte-1] = '\0';
@@ -641,8 +634,6 @@ main_loop(std::vector<std::string> const & commands)
             j++;
         }
 
-        prev = now;
-
         // dump new-line on data...
 
         if (option::data.is_open())
@@ -654,7 +645,9 @@ main_loop(std::vector<std::string> const & commands)
 
         // sleep for the nominal interval...
 
-        std::this_thread::sleep_for(option::nominal_interval);
+        prev = now;
+
+        std::this_thread::sleep_until(now + option::nominal_interval);
     }
 
 
