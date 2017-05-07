@@ -17,6 +17,11 @@
  *
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <sched.h>
+
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -52,6 +57,8 @@ namespace option
     bool                        daemon;
     bool                        drop_zero;
     bool                        banner = true;
+    int                         cpu = -1;
+
     std::string                 datafile;
     std::ofstream               data;
 
@@ -551,9 +558,20 @@ main_loop(std::vector<std::string> const & commands)
         // dump output of different commands...
 
         size_t i = 0, j = 0;
-                    
+
         auto now = std::chrono::system_clock::now();
         option::interval = std::chrono::duration_cast<std::chrono::microseconds>(now - prev);
+
+        // set affinity of the parent
+        //
+        cpu_set_t set;
+        CPU_ZERO(&set);
+
+        if (option::cpu >= 0) {
+            CPU_SET(option::cpu, &set);
+            if (sched_setaffinity(getpid(), sizeof(set), &set) == -1)
+                throw std::system_error(errno, std::generic_category(), "sched_setaffinity");
+        }
 
         for(auto const &command : commands)
         {
@@ -572,6 +590,11 @@ main_loop(std::vector<std::string> const & commands)
             if (pid == 0) {
 
                 /// child ///
+
+                if (option::cpu >= 0) {
+                    if (sched_setaffinity(getpid(), sizeof(set), &set) == -1)
+                        throw std::system_error(errno, std::generic_category(), "sched_setaffinity");
+                }
 
                 ::close(fds[0]); // for reading
                 ::close(1);
@@ -658,7 +681,7 @@ main_loop(std::vector<std::string> const & commands)
 void usage()
 {
     std::cout << "usage: " << __progname <<
-        " [-h] [-c|--color] [-i|--interval msec] [-x|--no-banner] [-t|--trace trace.out]\n"
+        " [-h] [-c|--color] [-C cpu] [-i|--interval msec] [-x|--no-banner] [-t|--trace trace.out]\n"
         "       [-e|-ee|-eee|--heuristic] [-d|-dd|-ddd|--diff] [-z|--drop-zero] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
     _Exit(0);
 }
@@ -697,6 +720,13 @@ try
             option::seconds = atoi(*++opt);
             continue;
         }
+
+        if (is_opt(*opt, "-C"))
+        {
+            option::cpu = atoi(*++opt);
+            continue;
+        }
+
         if (is_opt(*opt, "-c", "--color"))
         {
             option::colors = true;
