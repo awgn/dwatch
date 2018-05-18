@@ -564,6 +564,8 @@ main_loop(std::vector<std::string> const & commands)
 
         // set affinity of the parent
         //
+
+#ifdef __linux__
         cpu_set_t set;
         CPU_ZERO(&set);
 
@@ -572,6 +574,7 @@ main_loop(std::vector<std::string> const & commands)
             if (sched_setaffinity(getpid(), sizeof(set), &set) == -1)
                 throw std::system_error(errno, std::generic_category(), "sched_setaffinity");
         }
+#endif
 
         for(auto const &command : commands)
         {
@@ -592,8 +595,10 @@ main_loop(std::vector<std::string> const & commands)
                 /// child ///
 
                 if (option::cpu >= 0) {
+#ifdef __linux__
                     if (sched_setaffinity(getpid(), sizeof(set), &set) == -1)
                         throw std::system_error(errno, std::generic_category(), "sched_setaffinity");
+#endif
                 }
 
                 ::close(fds[0]); // for reading
