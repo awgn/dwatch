@@ -93,7 +93,7 @@ namespace vt100
     inline const char * eline()  { return details::ELINE; }
     inline const char * reset()  { return details::RESET; }
     inline const char * bold()   { return option::colors ? details::BOLD  : ""; }
-    inline const char * greeen() { return option::colors ? details::GREEN : ""; }
+    inline const char * green()  { return option::colors ? details::GREEN : ""; }
     inline const char * blue()   { return option::colors ? details::BLUE  : ""; }
     inline const char * red()    { return option::colors ? details::RED   : ""; }
 
@@ -133,18 +133,34 @@ namespace dwatch
     std::function<show_type>    show_function;
 
     template <typename T>
-    std::string pretty(T v)
+    std::string pretty(T v, bool bit = false)
     {
         double value = v;
         std::ostringstream out;
-        if (value > 1000000000)
-            out << value/1000000000 << "Gps";
-        else if (value > 1000000)
-            out << value/1000000 << "Mps";
-        else if (value > 1000)
-            out << value/1000 << "Kps";
+
+        if (bit)
+        {
+            if (value > 1000000000)
+                out << value/1000000000 << "Gbps";
+            else if (value > 1000000)
+                out << value/1000000 << "Mbps";
+            else if (value > 1000)
+                out << value/1000 << "Kbps";
+            else
+                out << value << "bps";
+        }
         else
-            out << value << "ps";
+        {
+            if (value > 1000000000)
+                out << value/1000000000 << "G";
+            else if (value > 1000000)
+                out << value/1000000 << "M";
+            else if (value > 1000)
+                out << value/1000 << "K";
+            else
+                out << value;
+        }
+
         return out.str();
     }
 
@@ -201,6 +217,21 @@ namespace dwatch
             if (rate > 0.0)
             {
                 out << vt100::bold() << vt100::red() << '|' << pretty(rate) << vt100::reset();
+            }
+        }
+        ,
+        [](std::ostream &out, int64_t val, int64_t diff, bool rst)
+        {
+            if (rst) return;
+
+            auto rate = static_cast<double>(diff*1000000)/option::interval.count();
+            if (rate > 0)
+            {
+                out << vt100::bold() << vt100::blue() << pretty(rate) << vt100::green() << '|' << pretty(rate*8, true) << vt100::reset();
+            }
+            else
+            {
+                out << vt100::blue() << val << vt100::reset();
             }
         }
     };
