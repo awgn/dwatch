@@ -718,7 +718,7 @@ void usage()
 {
     std::cout << "usage: " << __progname <<
         " [-h] [-c|--color] [-C cpu] [-i|--interval msec] [-x|--no-banner] [-t|--trace trace.out]\n"
-        "       [-e|-ee|-eee|--heuristic] [-d|-dd|-ddd|--diff] [-z|--drop-zero] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
+        "       [-e|-ee|-eee|--heuristic] [-d|-dd|-ddd...|--diff] [-z|--drop-zero] [--tab column] [--daemon] [-n sec] 'command' ['commands'...] " << std::endl;
     _Exit(0);
 }
 
@@ -784,6 +784,24 @@ try
         {
             option::diffmode = 1;
             option::showpol += 3;
+            continue;
+        }
+        if (is_opt(*opt, "-dddd"))
+        {
+            option::diffmode = 1;
+            option::showpol += 4;
+            continue;
+        }
+        if (is_opt(*opt, "-ddddd"))
+        {
+            option::diffmode = 1;
+            option::showpol += 5;
+            continue;
+        }
+        if (is_opt(*opt, "-dddddd"))
+        {
+            option::diffmode = 1;
+            option::showpol += 6;
             continue;
         }
         if (is_opt(*opt, "-x", "--no-banner"))
