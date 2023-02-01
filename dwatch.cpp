@@ -342,7 +342,9 @@ get_ranges(const char *str)
                     local_state = state::sign;
                     local_point.first = local_index;
                 }
-                else if (!dwatch::heuristic(*c)) {
+                else if (dwatch::heuristic(*c)) {
+                    local_state = state::space;
+                } else {
                     local_state = state::none;
                 }
             } break;
@@ -413,7 +415,9 @@ get_mutables(const char *str, std::vector<dwatch::range_type> const &xs)
     ret.reserve(xs.size());
     for(auto &x : xs)
     {
-        ret.push_back(stoll(std::string(str + x.first, str + x.second)));
+        try {
+            ret.push_back(stoll(std::string(str + x.first, str + x.second)));
+        } catch(...) {}
     }
     return ret;
 }
@@ -876,4 +880,3 @@ catch(std::exception &e)
 {
     std::cerr << __progname << ": " << e.what() << std::endl;
 }
-
