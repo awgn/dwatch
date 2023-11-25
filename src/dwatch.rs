@@ -1,6 +1,5 @@
 use std::{
     collections::hash_map::DefaultHasher,
-    error::Error,
     hash::Hasher,
     io::Write,
     iter::zip,
@@ -15,6 +14,7 @@ use std::{
 
 use ansi_term::Colour;
 
+use anyhow::{anyhow, Result};
 use itertools::EitherOrBoth::{Both, Left, Right};
 use itertools::Itertools;
 
@@ -47,19 +47,19 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
     }
 }
 
-type WriterBox = Box<
-    dyn Fn(&mut dyn Write, (&i64, &i64), Duration) -> std::io::Result<()> + Send + Sync + 'static,
->;
+type WriterBox =
+    Box<dyn Fn(&mut dyn Write, (&i64, &i64), Duration) -> Result<()> + Send + Sync + 'static>;
 
 lazy_static! {
     static ref WRITERS: Vec<WriterBox> = vec![
         Box::new(
-            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> std::io::Result<()> {
-                write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))
+            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
+                write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                Ok(())
             }
         ),
         Box::new(
-            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> std::io::Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
                     write!(out, "_{}", Colour::Red.paint(format!("{}", num.1)))?;
@@ -68,12 +68,13 @@ lazy_static! {
             }
         ),
         Box::new(
-            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> std::io::Result<()> {
-                write!(out, "{}", Colour::Red.bold().paint(format!("{}", num.1)))
+            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
+                write!(out, "{}", Colour::Red.bold().paint(format!("{}", num.1)))?;
+                Ok(())
             }
         ),
         Box::new(
-            |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> std::io::Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> Result<()> {
                 if *num.1 != 0 {
                     let delta = *num.1 as f64 / interval.as_secs_f64();
                     write!(
@@ -82,14 +83,16 @@ lazy_static! {
                         Colour::Red
                             .bold()
                             .paint(format_number(delta, false).to_string())
-                    )
+                    )?;
+                    Ok(())
                 } else {
-                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))
+                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                    Ok(())
                 }
             }
         ),
         Box::new(
-            |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> std::io::Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> Result<()> {
                 if *num.1 != 0 {
                     let delta = (*num.1 * 8) as f64 / interval.as_secs_f64();
                     write!(
@@ -98,20 +101,18 @@ lazy_static! {
                         Colour::Green
                             .bold()
                             .paint(format_number(delta, true).to_string())
-                    )
+                    )?;
+                    Ok(())
                 } else {
-                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))
+                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                    Ok(())
                 }
             }
         ),
     ];
 }
 
-pub fn run(
-    opt: Options,
-    term: Arc<AtomicBool>,
-    delta: Arc<AtomicUsize>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub fn run(opt: Options, term: Arc<AtomicBool>, delta: Arc<AtomicUsize>) -> Result<()> {
     let interval = Duration::from_secs(opt.interval.unwrap_or(1));
 
     print!("{}", ansi_escapes::ClearScreen);
@@ -154,9 +155,9 @@ pub fn run(
         let writer_idx = delta.load(Ordering::Relaxed) % WRITERS.len();
 
         for output in outputs {
-            let output = output.join().map_err(|e| -> Box<dyn Error + Send + Sync> {
-                format!("Thread Join error: {:?}", e).into()
-            })?;
+            let output = output
+                .join()
+                .map_err(|e| -> anyhow::Error { anyhow!("Thread Join error: {:?}", e) })?;
 
             let interval = Instant::now() - last_run;
             // transform and print the output, line by line
@@ -175,7 +176,6 @@ pub fn run(
         }
 
         write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
-
         last_run = Instant::now();
 
         let nap = next - last_run;
@@ -193,7 +193,7 @@ fn writeln_line(
     lineno: u64,
     lmap: &mut LineMap,
     interval: Duration,
-) -> std::io::Result<()> {
+) -> Result<()> {
     let rp = RangeParser::new(|c| c.is_ascii_whitespace() || ".,:;()[]{}<>'`\"|".contains(c));
 
     let ranges = rp.get_numeric_ranges(line);
@@ -231,7 +231,7 @@ fn writeln_data(
     deltas: &[i64],
     ranges: &[Range<usize>],
     interval: Duration,
-) -> std::io::Result<()> {
+) -> Result<()> {
     let s = strings.iter();
     let n = zip(absolutes, deltas);
 
@@ -257,7 +257,8 @@ fn writeln_data(
         }
     }
 
-    writeln!(out, "{}", ansi_escapes::EraseEndLine)
+    writeln!(out, "{}", ansi_escapes::EraseEndLine)?;
+    Ok(())
 }
 
 fn write_number(
@@ -265,14 +266,11 @@ fn write_number(
     writer_idx: usize,
     num: (&i64, &i64),
     interval: Duration,
-) -> std::io::Result<()> {
+) -> Result<()> {
     WRITERS[writer_idx](out, num, interval)
 }
 
-fn run_command(
-    cmd: &str,
-    _opt: Arc<Options>,
-) -> Result<String, Box<(dyn Error + Send + Sync + 'static)>> {
+fn run_command(cmd: &str, _opt: Arc<Options>) -> Result<String> {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)

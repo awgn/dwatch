@@ -12,11 +12,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use anyhow::Result;
 
 #[macro_use]
 extern crate lazy_static;
 
-fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+
+fn main() -> Result<()> {
     let mut opts = Options::parse();
 
     if opts.commands.is_empty() {
