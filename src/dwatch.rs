@@ -2,7 +2,6 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::Hasher,
     io::Write,
-    iter::zip,
     ops::Range,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -15,13 +14,33 @@ use std::{
 use ansi_term::Colour;
 
 use anyhow::{anyhow, Result};
-use itertools::EitherOrBoth::{Both, Left, Right};
+use itertools::{EitherOrBoth::{Both, Left, Right}, izip, multizip};
 use itertools::Itertools;
 
 use crate::options::Options;
 use crate::ranges::RangeParser;
 
-type LineMap = std::collections::HashMap<(u64, u64), Vec<i64>>;
+#[derive(Debug, Clone)]
+struct LineNumbers {
+    num: Vec<i64>,
+    delta: Vec<i64>,
+    min: Vec<i64>,
+    max: Vec<i64>,
+}
+
+impl LineNumbers {
+    fn new(numbers: Vec<i64>) -> Self {
+        let len = numbers.len();
+        Self {
+            num: numbers.clone(),
+            delta: numbers,
+            min: vec![0; len],
+            max: vec![0; len],
+        }
+    }
+}
+
+type LineMap = std::collections::HashMap<(u64, u64), LineNumbers>;
 
 fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
     let value = v.into();
@@ -49,14 +68,14 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
 
 pub struct WriterBox {
     write:
-        Box<dyn Fn(&mut dyn Write, (&i64, &i64), Duration) -> Result<()> + Send + Sync + 'static>,
+        Box<dyn Fn(&mut dyn Write, (&i64, &i64, &i64, &i64), Duration) -> Result<()> + Send + Sync + 'static>,
     pub style: String,
 }
 
 impl WriterBox {
     fn new<F>(style: String, fun: F) -> Self
     where
-        F: Fn(&mut dyn Write, (&i64, &i64), Duration) -> Result<()> + Send + Sync + 'static,
+        F: Fn(&mut dyn Write, (&i64, &i64, &i64, &i64), Duration) -> Result<()> + Send + Sync + 'static,
     {
         Self {
             write: Box::new(fun),
@@ -64,7 +83,7 @@ impl WriterBox {
         }
     }
 
-    pub fn index(s : &str) -> Option<usize> {
+    pub fn index(s: &str) -> Option<usize> {
         WRITERS.iter().position(|w| w.style == s)
     }
 }
@@ -73,14 +92,14 @@ lazy_static! {
     static ref WRITERS: Vec<WriterBox> = vec![
         WriterBox::new(
             "default".into(),
-            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 Ok(())
             }
         ),
         WriterBox::new(
             "abs-delta".into(),
-            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
                     write!(out, "_{}", Colour::Red.paint(format!("{}", num.1)))?;
@@ -90,14 +109,14 @@ lazy_static! {
         ),
         WriterBox::new(
             "delta".into(),
-            |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Red.bold().paint(format!("{}", num.1)))?;
                 Ok(())
             }
         ),
         WriterBox::new(
             "fancy".into(),
-            |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), interval: Duration| -> Result<()> {
                 if *num.1 != 0 {
                     let delta = *num.1 as f64 / interval.as_secs_f64();
                     write!(
@@ -116,7 +135,7 @@ lazy_static! {
         ),
         WriterBox::new(
             "fancy-net".into(),
-            |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> Result<()> {
+            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), interval: Duration| -> Result<()> {
                 if *num.1 != 0 {
                     let delta = (*num.1 * 8) as f64 / interval.as_secs_f64();
                     write!(
@@ -126,6 +145,39 @@ lazy_static! {
                             .bold()
                             .paint(format_number(delta, true).to_string())
                     )?;
+                    Ok(())
+                } else {
+                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                    Ok(())
+                }
+            }
+        ),
+        WriterBox::new(
+            "stats".into(),
+            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
+                write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                if num.1 != &0 {
+                    write!(out, "_{}", Colour::Red.paint(format!("{}", num.1)))?;
+                    write!(out, "_{}", Colour::Black.bold().paint(format!("{}/{}", num.2, num.3)))?;
+                }
+                Ok(())
+            }
+        ),
+        WriterBox::new(
+            "stats-net".into(),
+            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), interval: Duration| -> Result<()> {
+                if *num.1 != 0 {
+                    let delta = *num.1 as f64 * 8.0 / interval.as_secs_f64();
+                    write!(
+                        out,
+                        "{}",
+                        Colour::Green
+                            .bold()
+                            .paint(format_number(delta, true).to_string())
+                    )?;
+                    write!(out, "_{}", Colour::Black.bold().paint(format!("{}/{}",
+                        format_number(*num.2 as f64 * 8.0 / interval.as_secs_f64(), true),
+                        format_number(*num.3 as f64 * 8.0 / interval.as_secs_f64(), true))))?;
                     Ok(())
                 } else {
                     write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
@@ -223,27 +275,41 @@ fn writeln_line(
     let ranges = rp.get_numeric_ranges(line);
     let strings = parse_strings(line, &ranges);
     let numbers = parse_numbers(line, &ranges);
-    let last_key = (lineno, chunks_fingerprint(&strings));
+    let key = (lineno, chunks_fingerprint(&strings));
 
-    let last_numbers = lmap.entry(last_key).or_insert(numbers.clone());
+    let line_stat = lmap.entry(key).or_insert(LineNumbers::new(numbers.clone()));
 
-    let deltas = {
-        if numbers.len() == last_numbers.len() {
+    let stat = {
+        if numbers.len() == line_stat.num.len() {
             let mut deltas = Vec::with_capacity(numbers.len());
 
-            for (a, b) in numbers.iter().zip(last_numbers.iter()) {
+            for (a, b) in numbers.iter().zip(line_stat.num.iter()) {
                 deltas.push(a - b);
             }
-            *last_numbers = numbers.clone();
-            deltas
+            line_stat.num = numbers.clone();
+            line_stat.delta = deltas;
+
+            for (min, max, value) in multizip((
+                &mut line_stat.min,
+                &mut line_stat.max,
+                &line_stat.delta)
+            ) {
+                *min = std::cmp::min(*min, *value);
+                *max = std::cmp::max(*max, *value);
+            }
+
+            line_stat.clone()
         } else {
-            *last_numbers = numbers.clone();
-            vec![0; numbers.len()]
+            line_stat.num = numbers.clone();
+            line_stat.delta = vec![0; numbers.len()];
+            line_stat.min = vec![0; numbers.len()];
+            line_stat.max = vec![0; numbers.len()];
+            line_stat.clone()
         }
     };
 
     writeln_data(
-        out, writer_idx, &strings, &numbers, &deltas, &ranges, interval,
+        out, writer_idx, &strings, &stat, &ranges, interval,
     )
 }
 
@@ -251,29 +317,26 @@ fn writeln_data(
     out: &mut dyn Write,
     writer_idx: usize,
     strings: &[&str],
-    absolutes: &[i64],
-    deltas: &[i64],
+    stat: &LineNumbers,
     ranges: &[Range<usize>],
     interval: Duration,
 ) -> Result<()> {
     let s = strings.iter();
-    let n = zip(absolutes, deltas);
-
     let first_is_number = !ranges.is_empty() && ranges[0].start == 0;
 
-    for chunk in n.zip_longest(s) {
+    for chunk in izip!(&stat.num, &stat.delta, &stat.min, &stat.max).zip_longest(s) {
         match chunk {
-            Both(number, string) => {
+            Both(numbers, string) => {
                 if first_is_number {
-                    write_number(out, writer_idx, number, interval)?;
+                    write_number(out, writer_idx, numbers, interval)?;
                     write!(out, "{}", string)?;
                 } else {
                     write!(out, "{}", string)?;
-                    write_number(out, writer_idx, number, interval)?;
+                    write_number(out, writer_idx, numbers, interval)?;
                 }
             }
-            Left(number) => {
-                write_number(out, writer_idx, number, interval)?;
+            Left(numbers) => {
+                write_number(out, writer_idx, numbers, interval)?;
             }
             Right(string) => {
                 write!(out, "{}", string)?;
@@ -288,10 +351,10 @@ fn writeln_data(
 fn write_number(
     out: &mut dyn Write,
     writer_idx: usize,
-    num: (&i64, &i64),
+    numbers: (&i64, &i64, &i64, &i64),
     interval: Duration,
 ) -> Result<()> {
-    (WRITERS[writer_idx].write)(out, num, interval)
+    (WRITERS[writer_idx].write)(out, numbers, interval)
 }
 
 fn run_command(cmd: &str, _opt: Arc<Options>) -> Result<String> {
