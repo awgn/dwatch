@@ -15,5 +15,8 @@ pub struct Options {
     #[clap(short, long, help = "Set the update interval in seconds")]
     pub interval: Option<u64>,
 
+    #[clap(long, help = "Style (one of: default, abs-delta, delta, fancy, fancy-net)")]
+    pub style: Option<String>,
+
     pub commands: Vec<String>,
 }

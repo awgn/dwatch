@@ -20,13 +20,14 @@ extern crate lazy_static;
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
-
     if opts.commands.is_empty() {
         return Ok(());
     }
 
     let term = Arc::new(AtomicBool::new(false));
-    let style = Arc::new(AtomicUsize::new(0));
+    let style = Arc::new(AtomicUsize::new(
+        opts.style.as_ref().and_then(|name| dwatch::WriterBox::index(name)).unwrap_or(0))
+    );
 
     let cloned_term = Arc::clone(&term);
     let cloned_style = Arc::clone(&style);

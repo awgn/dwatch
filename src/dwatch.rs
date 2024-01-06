@@ -47,18 +47,39 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
     }
 }
 
-type WriterBox =
-    Box<dyn Fn(&mut dyn Write, (&i64, &i64), Duration) -> Result<()> + Send + Sync + 'static>;
+pub struct WriterBox {
+    write:
+        Box<dyn Fn(&mut dyn Write, (&i64, &i64), Duration) -> Result<()> + Send + Sync + 'static>,
+    pub style: String,
+}
+
+impl WriterBox {
+    fn new<F>(style: String, fun: F) -> Self
+    where
+        F: Fn(&mut dyn Write, (&i64, &i64), Duration) -> Result<()> + Send + Sync + 'static,
+    {
+        Self {
+            write: Box::new(fun),
+            style,
+        }
+    }
+
+    pub fn index(s : &str) -> Option<usize> {
+        WRITERS.iter().position(|w| w.style == s)
+    }
+}
 
 lazy_static! {
     static ref WRITERS: Vec<WriterBox> = vec![
-        Box::new(
+        WriterBox::new(
+            "default".into(),
             |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 Ok(())
             }
         ),
-        Box::new(
+        WriterBox::new(
+            "abs-delta".into(),
             |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
@@ -67,13 +88,15 @@ lazy_static! {
                 Ok(())
             }
         ),
-        Box::new(
+        WriterBox::new(
+            "delta".into(),
             |out: &mut dyn Write, num: (&i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Red.bold().paint(format!("{}", num.1)))?;
                 Ok(())
             }
         ),
-        Box::new(
+        WriterBox::new(
+            "fancy".into(),
             |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> Result<()> {
                 if *num.1 != 0 {
                     let delta = *num.1 as f64 / interval.as_secs_f64();
@@ -91,7 +114,8 @@ lazy_static! {
                 }
             }
         ),
-        Box::new(
+        WriterBox::new(
+            "fancy-net".into(),
             |out: &mut dyn Write, num: (&i64, &i64), interval: Duration| -> Result<()> {
                 if *num.1 != 0 {
                     let delta = (*num.1 * 8) as f64 / interval.as_secs_f64();
@@ -112,7 +136,7 @@ lazy_static! {
     ];
 }
 
-pub fn run(opt: Options, term: Arc<AtomicBool>, delta: Arc<AtomicUsize>) -> Result<()> {
+pub fn run(opt: Options, term: Arc<AtomicBool>, style_index: Arc<AtomicUsize>) -> Result<()> {
     let interval = Duration::from_secs(opt.interval.unwrap_or(1));
 
     print!("{}", ansi_escapes::ClearScreen);
@@ -127,41 +151,41 @@ pub fn run(opt: Options, term: Arc<AtomicBool>, delta: Arc<AtomicUsize>) -> Resu
 
     while Instant::now() < end {
         if term.load(Ordering::Relaxed) {
-            println!("SIGTERM");
+            eprintln!("SIGTERM");
             break;
         }
 
-        let mut outputs: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
+        let mut thread_handles: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
 
         for cmd in &opt.commands {
             let cmd = cmd.clone();
             let opt = Arc::clone(&opt);
-            let output = std::thread::spawn(move || run_command(&cmd, opt).unwrap());
-            outputs.push(output);
+            thread_handles.push(std::thread::spawn(move || run_command(&cmd, opt).unwrap()));
         }
 
         print!("{}", ansi_escapes::CursorTo::TopLeft);
 
         if !opt.no_banner {
             println!(
-                "Every {} ms, delta:{}: {}\n",
+                "Every {} ms, delta[{}]: {}{}\n",
                 interval.as_millis(),
-                delta.load(Ordering::Relaxed) % WRITERS.len(),
-                opt.commands.join(" | ")
+                WRITERS[style_index.load(Ordering::Relaxed) % WRITERS.len()].style,
+                opt.commands.join(" | "),
+                ansi_escapes::EraseEndLine
             );
         }
 
         let mut lineno = 0u64;
-        let writer_idx = delta.load(Ordering::Relaxed) % WRITERS.len();
+        let writer_idx = style_index.load(Ordering::Relaxed) % WRITERS.len();
 
-        for output in outputs {
-            let output = output
+        for th in thread_handles {
+            let output = th
                 .join()
                 .map_err(|e| -> anyhow::Error { anyhow!("Thread Join error: {:?}", e) })?;
 
             let interval = Instant::now() - last_run;
-            // transform and print the output, line by line
 
+            // transform and print the output, line by line
             for line in output.lines() {
                 writeln_line(
                     &mut std::io::stdout(),
@@ -198,28 +222,28 @@ fn writeln_line(
 
     let ranges = rp.get_numeric_ranges(line);
     let strings = parse_strings(line, &ranges);
-    let absolutes = parse_numbers(line, &ranges);
+    let numbers = parse_numbers(line, &ranges);
     let last_key = (lineno, chunks_fingerprint(&strings));
 
-    let last_absolutes = lmap.entry(last_key).or_insert(absolutes.clone());
+    let last_numbers = lmap.entry(last_key).or_insert(numbers.clone());
 
     let deltas = {
-        if absolutes.len() == last_absolutes.len() {
-            let mut deltas = Vec::with_capacity(absolutes.len());
+        if numbers.len() == last_numbers.len() {
+            let mut deltas = Vec::with_capacity(numbers.len());
 
-            for (a, b) in absolutes.iter().zip(last_absolutes.iter()) {
+            for (a, b) in numbers.iter().zip(last_numbers.iter()) {
                 deltas.push(a - b);
             }
-            *last_absolutes = absolutes.clone();
+            *last_numbers = numbers.clone();
             deltas
         } else {
-            *last_absolutes = absolutes.clone();
-            vec![0; absolutes.len()]
+            *last_numbers = numbers.clone();
+            vec![0; numbers.len()]
         }
     };
 
     writeln_data(
-        out, writer_idx, &strings, &absolutes, &deltas, &ranges, interval,
+        out, writer_idx, &strings, &numbers, &deltas, &ranges, interval,
     )
 }
 
@@ -267,7 +291,7 @@ fn write_number(
     num: (&i64, &i64),
     interval: Duration,
 ) -> Result<()> {
-    WRITERS[writer_idx](out, num, interval)
+    (WRITERS[writer_idx].write)(out, num, interval)
 }
 
 fn run_command(cmd: &str, _opt: Arc<Options>) -> Result<String> {
