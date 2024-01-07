@@ -197,7 +197,6 @@ pub fn run(opt: Options, term: Arc<AtomicBool>, style_index: Arc<AtomicUsize>) -
     let end = now + Duration::from_secs(opt.seconds.unwrap_or(9999999999));
     let mut next = now + interval;
     let mut line_map = LineMap::new();
-    let mut last_run = Instant::now();
 
     let opt = Arc::new(opt);
 
@@ -235,8 +234,6 @@ pub fn run(opt: Options, term: Arc<AtomicBool>, style_index: Arc<AtomicUsize>) -
                 .join()
                 .map_err(|e| -> anyhow::Error { anyhow!("Thread Join error: {:?}", e) })?;
 
-            let interval = Instant::now() - last_run;
-
             // transform and print the output, line by line
             for line in output.lines() {
                 writeln_line(
@@ -252,9 +249,8 @@ pub fn run(opt: Options, term: Arc<AtomicBool>, style_index: Arc<AtomicUsize>) -
         }
 
         write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
-        last_run = Instant::now();
 
-        let nap = next - last_run;
+        let nap = next - Instant::now();
         next += interval;
         sleep(nap);
     }
