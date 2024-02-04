@@ -2,6 +2,7 @@ mod dwatch;
 mod options;
 mod ranges;
 
+use anyhow::Result;
 use clap::Parser;
 use options::Options;
 use signal_hook::consts::signal::*;
@@ -12,11 +13,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use anyhow::Result;
 
 #[macro_use]
 extern crate lazy_static;
-
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -26,8 +25,11 @@ fn main() -> Result<()> {
 
     let term = Arc::new(AtomicBool::new(false));
     let style = Arc::new(AtomicUsize::new(
-        opts.style.as_ref().and_then(|name| dwatch::WriterBox::index(name)).unwrap_or(0))
-    );
+        opts.style
+            .as_ref()
+            .and_then(|name| dwatch::WriterBox::index(name))
+            .unwrap_or(0),
+    ));
 
     let cloned_term = Arc::clone(&term);
     let cloned_style = Arc::clone(&style);

@@ -14,8 +14,11 @@ use std::{
 use ansi_term::Colour;
 
 use anyhow::{anyhow, Result};
-use itertools::{EitherOrBoth::{Both, Left, Right}, izip, multizip};
 use itertools::Itertools;
+use itertools::{
+    izip, multizip,
+    EitherOrBoth::{Both, Left, Right},
+};
 
 use crate::options::Options;
 use crate::ranges::RangeParser;
@@ -66,20 +69,24 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
     }
 }
 
+type WriterFn = dyn Fn(&mut dyn Write, (&i64, &i64, &i64, &i64), Duration) -> Result<()> + Send + Sync + 'static;
+
 pub struct WriterBox {
-    write:
-        Box<dyn Fn(&mut dyn Write, (&i64, &i64, &i64, &i64), Duration) -> Result<()> + Send + Sync + 'static>,
+    write: Box<WriterFn>,
     pub style: String,
 }
 
 impl WriterBox {
-    fn new<F>(style: String, fun: F) -> Self
+    fn new<F>(style: &str, fun: F) -> Self
     where
-        F: Fn(&mut dyn Write, (&i64, &i64, &i64, &i64), Duration) -> Result<()> + Send + Sync + 'static,
+        F: Fn(&mut dyn Write, (&i64, &i64, &i64, &i64), Duration) -> Result<()>
+            + Send
+            + Sync
+            + 'static,
     {
         Self {
             write: Box::new(fun),
-            style,
+            style: style.to_owned(),
         }
     }
 
@@ -91,14 +98,14 @@ impl WriterBox {
 lazy_static! {
     static ref WRITERS: Vec<WriterBox> = vec![
         WriterBox::new(
-            "default".into(),
+            "default",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 Ok(())
             }
         ),
         WriterBox::new(
-            "abs-delta".into(),
+            "abs-delta",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
@@ -108,15 +115,18 @@ lazy_static! {
             }
         ),
         WriterBox::new(
-            "delta".into(),
+            "delta",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Red.bold().paint(format!("{}", num.1)))?;
                 Ok(())
             }
         ),
         WriterBox::new(
-            "fancy".into(),
-            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), interval: Duration| -> Result<()> {
+            "fancy",
+            |out: &mut dyn Write,
+             num: (&i64, &i64, &i64, &i64),
+             interval: Duration|
+             -> Result<()> {
                 if *num.1 != 0 {
                     let delta = *num.1 as f64 / interval.as_secs_f64();
                     write!(
@@ -134,8 +144,11 @@ lazy_static! {
             }
         ),
         WriterBox::new(
-            "fancy-net".into(),
-            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), interval: Duration| -> Result<()> {
+            "fancy-net",
+            |out: &mut dyn Write,
+             num: (&i64, &i64, &i64, &i64),
+             interval: Duration|
+             -> Result<()> {
                 if *num.1 != 0 {
                     let delta = (*num.1 * 8) as f64 / interval.as_secs_f64();
                     write!(
@@ -153,19 +166,26 @@ lazy_static! {
             }
         ),
         WriterBox::new(
-            "stats".into(),
+            "stats",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
                     write!(out, "_{}", Colour::Red.paint(format!("{}", num.1)))?;
-                    write!(out, "_{}", Colour::Black.bold().paint(format!("{}/{}", num.2, num.3)))?;
+                    write!(
+                        out,
+                        "_{}",
+                        Colour::Black.bold().paint(format!("{}/{}", num.2, num.3))
+                    )?;
                 }
                 Ok(())
             }
         ),
         WriterBox::new(
-            "stats-net".into(),
-            |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), interval: Duration| -> Result<()> {
+            "stats-net",
+            |out: &mut dyn Write,
+             num: (&i64, &i64, &i64, &i64),
+             interval: Duration|
+             -> Result<()> {
                 if *num.1 != 0 {
                     let delta = *num.1 as f64 * 8.0 / interval.as_secs_f64();
                     write!(
@@ -175,9 +195,15 @@ lazy_static! {
                             .bold()
                             .paint(format_number(delta, true).to_string())
                     )?;
-                    write!(out, "_{}", Colour::Black.bold().paint(format!("{}/{}",
-                        format_number(*num.2 as f64 * 8.0 / interval.as_secs_f64(), true),
-                        format_number(*num.3 as f64 * 8.0 / interval.as_secs_f64(), true))))?;
+                    write!(
+                        out,
+                        "_{}",
+                        Colour::Black.bold().paint(format!(
+                            "{}/{}",
+                            format_number(*num.2 as f64 * 8.0 / interval.as_secs_f64(), true),
+                            format_number(*num.3 as f64 * 8.0 / interval.as_secs_f64(), true)
+                        ))
+                    )?;
                     Ok(())
                 } else {
                     write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
@@ -285,11 +311,9 @@ fn writeln_line(
             line_stat.num = numbers.clone();
             line_stat.delta = deltas;
 
-            for (min, max, value) in multizip((
-                &mut line_stat.min,
-                &mut line_stat.max,
-                &line_stat.delta)
-            ) {
+            for (min, max, value) in
+                multizip((&mut line_stat.min, &mut line_stat.max, &line_stat.delta))
+            {
                 *min = std::cmp::min(*min, *value);
                 *max = std::cmp::max(*max, *value);
             }
@@ -304,9 +328,7 @@ fn writeln_line(
         }
     };
 
-    writeln_data(
-        out, writer_idx, &strings, &stat, &ranges, interval,
-    )
+    writeln_data(out, writer_idx, &strings, &stat, &ranges, interval)
 }
 
 fn writeln_data(
