@@ -292,7 +292,7 @@ fn writeln_line(
     lmap: &mut LineMap,
     interval: Duration,
 ) -> Result<()> {
-    let rp = RangeParser::new(|c| c.is_ascii_whitespace() || ".,:;()[]{}<>'`\"|".contains(c));
+    let rp = RangeParser::new(|c| c.is_ascii_whitespace() || ".,:;()[]{}<>'`\"|=".contains(c));
 
     let ranges = rp.get_numeric_ranges(line);
     let strings = parse_strings(line, &ranges);
