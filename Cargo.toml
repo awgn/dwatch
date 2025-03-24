@@ -8,8 +8,8 @@ edition = "2021"
 [dependencies]
 ansi-escapes = "0.1.1"
 ansi_term = "0.12.1"
-anyhow = "1.0.75"
-clap = { version = "4.4.7", features = ["derive"] }
+anyhow = "1.0.97"
+clap = { version = "4.5.32", features = ["derive"] }
 itertools = "0.11.0"
-lazy_static = "1.4.0"
+lazy_static = "1.5.0"
 signal-hook = "0.3.17"
