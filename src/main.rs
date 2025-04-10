@@ -12,10 +12,12 @@ use signal_hook::iterator::SignalsInfo;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 #[macro_use]
 extern crate lazy_static;
+
+static TERM : AtomicBool = AtomicBool::new(false);
+static STYLE : AtomicUsize = AtomicUsize::new(0);
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -23,16 +25,12 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let term = Arc::new(AtomicBool::new(false));
-    let style = Arc::new(AtomicUsize::new(
+    STYLE.store(
         opts.style
             .as_ref()
             .and_then(|name| dwatch::WriterBox::index(name))
-            .unwrap_or(0),
-    ));
-
-    let cloned_term = Arc::clone(&term);
-    let cloned_style = Arc::clone(&style);
+            .unwrap_or(0), Ordering::Relaxed
+    );
 
     std::thread::spawn(move || {
         let mut sigs = vec![SIGTSTP, SIGWINCH];
@@ -43,11 +41,11 @@ fn main() -> Result<()> {
         for info in &mut signals {
             match info {
                 SIGTERM | SIGINT | SIGTSTP => {
-                    cloned_term.store(true, Ordering::Relaxed);
+                    TERM.store(true, Ordering::Relaxed);
                     break;
                 }
                 SIGQUIT => {
-                    cloned_style.fetch_add(1, Ordering::Relaxed);
+                    STYLE.fetch_add(1, Ordering::Relaxed);
                 }
                 _ => {}
             }
@@ -58,5 +56,5 @@ fn main() -> Result<()> {
         opts.commands = vec![opts.commands.join(" ")];
     }
 
-    dwatch::run(opts, term, style)
+    dwatch::run(opts)
 }

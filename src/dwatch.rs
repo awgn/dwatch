@@ -4,7 +4,7 @@ use std::{
     io::Write,
     ops::Range,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::Ordering,
         Arc,
     },
     thread::{sleep, JoinHandle},
@@ -22,6 +22,9 @@ use itertools::{
 
 use crate::options::Options;
 use crate::ranges::RangeParser;
+
+use crate::TERM;
+use crate::STYLE;
 
 #[derive(Debug, Clone)]
 struct LineNumbers {
@@ -105,7 +108,7 @@ lazy_static! {
             }
         ),
         WriterBox::new(
-            "abs-delta",
+            "number-delta",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
                 write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
@@ -214,7 +217,7 @@ lazy_static! {
     ];
 }
 
-pub fn run(opt: Options, term: Arc<AtomicBool>, style_index: Arc<AtomicUsize>) -> Result<()> {
+pub fn run(opt: Options) -> Result<()> {
     let interval = Duration::from_secs(opt.interval.unwrap_or(1));
 
     print!("{}", ansi_escapes::ClearScreen);
@@ -227,7 +230,7 @@ pub fn run(opt: Options, term: Arc<AtomicBool>, style_index: Arc<AtomicUsize>) -
     let opt = Arc::new(opt);
 
     while Instant::now() < end {
-        if term.load(Ordering::Relaxed) {
+        if TERM.load(Ordering::Relaxed) {
             eprintln!("SIGTERM");
             break;
         }
@@ -246,14 +249,14 @@ pub fn run(opt: Options, term: Arc<AtomicBool>, style_index: Arc<AtomicUsize>) -
             println!(
                 "Every {} ms, delta[{}]: {}{}\n",
                 interval.as_millis(),
-                WRITERS[style_index.load(Ordering::Relaxed) % WRITERS.len()].style,
+                WRITERS[STYLE.load(Ordering::Relaxed) % WRITERS.len()].style,
                 opt.commands.join(" | "),
                 ansi_escapes::EraseEndLine
             );
         }
 
         let mut lineno = 0u64;
-        let writer_idx = style_index.load(Ordering::Relaxed) % WRITERS.len();
+        let writer_idx = STYLE.load(Ordering::Relaxed) % WRITERS.len();
 
         for th in thread_handles {
             let output = th
