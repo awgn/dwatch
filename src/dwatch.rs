@@ -103,14 +103,14 @@ lazy_static! {
         WriterBox::new(
             "default",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
-                write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                write!(out, "{}", Colour::Blue.bold().paint(format!("{}", num.0)))?;
                 Ok(())
             }
         ),
         WriterBox::new(
             "number-delta",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
-                write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                write!(out, "{}", Colour::Blue.bold().paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
                     write!(out, "_{}", Colour::Red.paint(format!("{}", num.1)))?;
                 }
@@ -141,7 +141,7 @@ lazy_static! {
                     )?;
                     Ok(())
                 } else {
-                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                    write!(out, "{}", Colour::Blue.bold().paint(format!("{}", num.0)))?;
                     Ok(())
                 }
             }
@@ -163,7 +163,7 @@ lazy_static! {
                     )?;
                     Ok(())
                 } else {
-                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                    write!(out, "{}", Colour::Blue.bold().paint(format!("{}", num.0)))?;
                     Ok(())
                 }
             }
@@ -171,7 +171,7 @@ lazy_static! {
         WriterBox::new(
             "stats",
             |out: &mut dyn Write, num: (&i64, &i64, &i64, &i64), _: Duration| -> Result<()> {
-                write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                write!(out, "{}", Colour::Blue.bold().paint(format!("{}", num.0)))?;
                 if num.1 != &0 {
                     write!(out, "_{}", Colour::Red.paint(format!("{}", num.1)))?;
                     write!(
@@ -209,7 +209,7 @@ lazy_static! {
                     )?;
                     Ok(())
                 } else {
-                    write!(out, "{}", Colour::Blue.paint(format!("{}", num.0)))?;
+                    write!(out, "{}", Colour::Blue.bold().paint(format!("{}", num.0)))?;
                     Ok(())
                 }
             }
@@ -247,7 +247,7 @@ pub fn run(opt: Options) -> Result<()> {
 
         if !opt.no_banner {
             println!(
-                "Every {} ms, delta[{}]: {}{}\n",
+                "Every {} ms, style {}: {}{}\n",
                 interval.as_millis(),
                 WRITERS[STYLE.load(Ordering::Relaxed) % WRITERS.len()].style,
                 opt.commands.join(" | "),
