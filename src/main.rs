@@ -12,12 +12,17 @@ use signal_hook::iterator::SignalsInfo;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::Condvar;
 
 #[macro_use]
 extern crate lazy_static;
 
 static TERM : AtomicBool = AtomicBool::new(false);
 static STYLE : AtomicUsize = AtomicUsize::new(0);
+
+lazy_static! {
+    static ref WAIT: Condvar = Condvar::new();
+}
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -46,6 +51,7 @@ fn main() -> Result<()> {
                 }
                 SIGQUIT => {
                     STYLE.fetch_add(1, Ordering::Relaxed);
+                    WAIT.notify_one();
                 }
                 _ => {}
             }

@@ -5,9 +5,9 @@ use std::{
     ops::Range,
     sync::{
         atomic::Ordering,
-        Arc,
+        Arc, Mutex,
     },
-    thread::{sleep, JoinHandle},
+    thread::{JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -25,6 +25,7 @@ use crate::ranges::RangeParser;
 
 use crate::TERM;
 use crate::STYLE;
+use crate::WAIT;
 
 #[derive(Debug, Clone)]
 struct LineNumbers {
@@ -229,6 +230,8 @@ pub fn run(opt: Options) -> Result<()> {
 
     let opt = Arc::new(opt);
 
+    let mutex = Mutex::new(());
+
     while Instant::now() < end {
         if TERM.load(Ordering::Relaxed) {
             eprintln!("SIGTERM");
@@ -278,10 +281,12 @@ pub fn run(opt: Options) -> Result<()> {
         }
 
         write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
-
         let nap = next - Instant::now();
-        next += interval;
-        sleep(nap);
+        let guard = mutex.lock().unwrap();
+        let (_lock, timeo_res) = WAIT.wait_timeout(guard, nap).unwrap();
+        if timeo_res.timed_out() {
+            next += interval;
+        }
     }
 
     Ok(())
