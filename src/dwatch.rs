@@ -23,15 +23,21 @@ use crate::{STYLE, TERM, WAIT};
 
 const AVERAGE_SECONDS_IN_YEAR: u64 = 31_556_952;
 
+/// Tracks numeric values from a line of text over time, computing deltas and statistics
 #[derive(Debug, Clone)]
 struct LineNumbers {
+    /// Current numeric values extracted from the line
     values: Vec<i64>,
+    /// Change from previous values (current - previous)
     delta: Vec<i64>,
+    /// Minimum delta observed for each position
     min: Vec<i64>,
+    /// Maximum delta observed for each position
     max: Vec<i64>,
 }
 
 impl LineNumbers {
+    /// Creates a new LineNumbers instance with initial values
     fn new(numbers: Vec<i64>) -> Self {
         let len = numbers.len();
         Self {
@@ -45,27 +51,32 @@ impl LineNumbers {
 
 type LineMap = std::collections::HashMap<(u64, u64), LineNumbers>;
 
+/// Formats a numeric value with appropriate unit suffixes
+///
+/// # Arguments
+/// * `v` - The value to format
+/// * `bit` - If true, formats as bits per second (bps), otherwise as raw count
 fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
     let value = v.into();
 
+    const GIGA: f64 = 1_000_000_000.0;
+    const MEGA: f64 = 1_000_000.0;
+    const KILO: f64 = 1_000.0;
+
     if bit {
-        if value > 1_000_000_000.0 {
-            format!("{:.2}_Gbps", value / 1_000_000_000.0)
-        } else if value > 1_000_000.0 {
-            format!("{:.2}_Mbps", value / 1_000_000.0)
-        } else if value > 1_000.0 {
-            format!("{:.2}_Kbps", value / 1_000.0)
-        } else {
-            format!("{value:.2}_bps")
+        match value {
+            v if v > GIGA => format!("{:.2}_Gbps", v / GIGA),
+            v if v > MEGA => format!("{:.2}_Mbps", v / MEGA),
+            v if v > KILO => format!("{:.2}_Kbps", v / KILO),
+            v => format!("{v:.2}_bps"),
         }
-    } else if value > 1_000_000_000.0 {
-        format!("{:.2}G", value / 1_000_000_000.0)
-    } else if value > 1_000_000.0 {
-        format!("{:.2}M", value / 1_000_000.0)
-    } else if value > 1_000.0 {
-        format!("{:.2}K", value / 1_000.0)
     } else {
-        format!("{value:.2}")
+        match value {
+            v if v > GIGA => format!("{:.2}G", v / GIGA),
+            v if v > MEGA => format!("{:.2}M", v / MEGA),
+            v if v > KILO => format!("{:.2}K", v / KILO),
+            v => format!("{v:.2}"),
+        }
     }
 }
 
@@ -203,8 +214,11 @@ static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
     ]
 });
 
+/// Main state container for the dwatch application
 pub struct DwatchState {
+    /// Parser for extracting numeric ranges from text
     range_parser: RangeParser,
+    /// Maps line identifiers to their numeric statistics
     line_map: LineMap,
 }
 
@@ -235,13 +249,14 @@ pub fn run(opt: Options) -> Result<()> {
         )
     };
 
+    // Pre-allocate thread handles vector
+    let mut thread_handles: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
+
     while Instant::now() < end {
         if TERM.load(Ordering::Relaxed) {
             eprintln!("SIGTERM");
             break;
         }
-
-        let mut thread_handles: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
 
         for cmd in &opt.commands {
             let cmd = cmd.clone();
@@ -265,7 +280,7 @@ pub fn run(opt: Options) -> Result<()> {
 
         let mut lineno = 0u64;
 
-        for th in thread_handles {
+        for th in thread_handles.drain(..) {
             let output = th
                 .join()
                 .map_err(|e| -> anyhow::Error { anyhow!("Thread Join error: {:?}", e) })?;
@@ -284,6 +299,8 @@ pub fn run(opt: Options) -> Result<()> {
         }
 
         write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
+        std::io::stdout().flush()?;
+
         let mut guard = mutex.lock();
         let timeo_res = WAIT.wait_until(&mut guard, next);
         if timeo_res.timed_out() {
@@ -397,9 +414,29 @@ fn run_command(cmd: &str, _opt: Arc<Options>) -> Result<String> {
         .arg("-c")
         .arg(cmd)
         .output()
-        .expect("failed to execute process");
+        .map_err(|e| anyhow!("Failed to execute command '{}': {}", cmd, e))?;
 
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.is_empty() {
+            return Err(anyhow!(
+                "Command '{}' failed with stderr: {}",
+                cmd,
+                stderr.trim()
+            ));
+        }
+        return Err(anyhow!(
+            "Command '{}' failed with exit code: {:?}",
+            cmd,
+            output.status.code()
+        ));
+    }
+
+    // Avoid unnecessary allocation if output is already valid UTF-8
+    match String::from_utf8(output.stdout) {
+        Ok(s) => Ok(s),
+        Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+    }
 }
 
 #[inline]
@@ -473,5 +510,61 @@ mod tests {
         assert_eq!(numbers[0], 1234);
         assert_eq!(numbers[1], 5678);
         Ok(())
+    }
+
+    #[test]
+    fn test_format_number() {
+        // Test without bit formatting
+        assert_eq!(format_number(500.0, false), "500.00");
+        assert_eq!(format_number(1500.0, false), "1.50K");
+        assert_eq!(format_number(1_500_000.0, false), "1.50M");
+        assert_eq!(format_number(1_500_000_000.0, false), "1.50G");
+
+        // Test with bit formatting
+        assert_eq!(format_number(500.0, true), "500.00_bps");
+        assert_eq!(format_number(1500.0, true), "1.50_Kbps");
+        assert_eq!(format_number(1_500_000.0, true), "1.50_Mbps");
+        assert_eq!(format_number(1_500_000_000.0, true), "1.50_Gbps");
+    }
+
+    #[test]
+    fn test_complement_ranges() {
+        let ranges = vec![Range { start: 0, end: 4 }, Range { start: 10, end: 14 }];
+        let complement = complement_ranges(&ranges, 20);
+
+        assert_eq!(complement.len(), 2);
+        assert_eq!(complement[0], Range { start: 4, end: 10 });
+        assert_eq!(complement[1], Range { start: 14, end: 20 });
+
+        // Edge case: no ranges
+        let complement = complement_ranges(&[], 10);
+        assert_eq!(complement.len(), 1);
+        assert_eq!(complement[0], Range { start: 0, end: 10 });
+
+        // Edge case: ranges cover entire string
+        let ranges = vec![Range { start: 0, end: 10 }];
+        let complement = complement_ranges(&ranges, 10);
+        assert_eq!(complement.len(), 0);
+    }
+
+    #[test]
+    fn test_chunks_fingerprint() {
+        let chunks1 = vec!["hello", " ", "world"];
+        let chunks2 = vec!["hello", " ", "world"];
+        let chunks3 = vec!["hello", "", "world"];
+        let chunks4 = vec!["goodbye", " ", "world"];
+
+        let fp1 = chunks_fingerprint(&chunks1);
+        let fp2 = chunks_fingerprint(&chunks2);
+        let fp3 = chunks_fingerprint(&chunks3);
+        let fp4 = chunks_fingerprint(&chunks4);
+
+        // Same chunks should produce same fingerprint
+        assert_eq!(fp1, fp2);
+
+        // Different chunks should produce different fingerprints
+        assert_ne!(fp1, fp3);
+        assert_ne!(fp1, fp4);
+        assert_ne!(fp3, fp4);
     }
 }
