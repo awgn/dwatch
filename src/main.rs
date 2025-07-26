@@ -12,17 +12,11 @@ use signal_hook::iterator::SignalsInfo;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::Condvar;
+use std::sync::{Condvar, LazyLock};
 
-#[macro_use]
-extern crate lazy_static;
-
-static TERM : AtomicBool = AtomicBool::new(false);
-static STYLE : AtomicUsize = AtomicUsize::new(0);
-
-lazy_static! {
-    static ref WAIT: Condvar = Condvar::new();
-}
+static TERM: AtomicBool = AtomicBool::new(false);
+static STYLE: AtomicUsize = AtomicUsize::new(0);
+static WAIT: LazyLock<Condvar> = LazyLock::new(|| Condvar::new());
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -34,7 +28,8 @@ fn main() -> Result<()> {
         opts.style
             .as_ref()
             .and_then(|name| dwatch::WriterBox::index(name))
-            .unwrap_or(0), Ordering::Relaxed
+            .unwrap_or(0),
+        Ordering::Relaxed,
     );
 
     std::thread::spawn(move || {

@@ -9,7 +9,6 @@ edition = "2021"
 ansi-escapes = "0.1.1"
 ansi_term = "0.12.1"
 anyhow = "1.0.98"
-clap = { version = "4.5.38", features = ["derive"] }
+clap = { version = "4.5.41", features = ["derive"] }
 itertools = "0.11.0"
-lazy_static = "1.5.0"
 signal-hook = "0.3.18"
