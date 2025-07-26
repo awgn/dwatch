@@ -12,11 +12,11 @@ use signal_hook::iterator::SignalsInfo;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::{Condvar, LazyLock};
+use std::sync::LazyLock;
 
 static TERM: AtomicBool = AtomicBool::new(false);
 static STYLE: AtomicUsize = AtomicUsize::new(0);
-static WAIT: LazyLock<Condvar> = LazyLock::new(|| Condvar::new());
+static WAIT: LazyLock<parking_lot::Condvar> = LazyLock::new(|| parking_lot::Condvar::new());
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -36,13 +36,18 @@ fn main() -> Result<()> {
         let mut sigs = vec![SIGTSTP, SIGWINCH];
 
         sigs.extend(TERM_SIGNALS);
-        let mut signals = SignalsInfo::<SignalOnly>::new(&sigs).unwrap();
+        let mut signals =
+            SignalsInfo::<SignalOnly>::new(&sigs).expect("failed to build SignalsInfo");
 
         for info in &mut signals {
             match info {
-                SIGTERM | SIGINT | SIGTSTP => {
+                SIGTERM | SIGINT => {
                     TERM.store(true, Ordering::Relaxed);
+                    WAIT.notify_one();
                     break;
+                }
+                SIGTSTP => {
+                    // TODO...
                 }
                 SIGQUIT => {
                     STYLE.fetch_add(1, Ordering::Relaxed);
