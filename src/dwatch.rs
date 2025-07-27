@@ -1,14 +1,14 @@
 use std::{
+    cell::RefCell,
     collections::hash_map::DefaultHasher,
+    fmt::Display,
     hash::Hasher,
     io::Write,
     ops::Range,
-    sync::{atomic::Ordering, Arc, LazyLock},
+    sync::{atomic::Ordering, Arc},
     thread::JoinHandle,
     time::{Duration, Instant},
 };
-
-use ansi_term::Colour;
 
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
@@ -17,11 +17,12 @@ use itertools::{
     EitherOrBoth::{Both, Left, Right},
 };
 
-use crate::options::Options;
-use crate::ranges::RangeParser;
-use crate::{STYLE, TERM, WAIT};
+use crate::{options::Options, FOCUS, FOCUS_RUN};
+use crate::{ranges::RangeParser, styles::WRITERS};
+use crate::{STYLE, STYLE_MAP, TERM, WAIT};
 
 const AVERAGE_SECONDS_IN_YEAR: u64 = 31_556_952;
+const FOCUS_PERIOD: usize = 3;
 
 /// Tracks numeric values from a line of text over time, computing deltas and statistics
 #[derive(Debug, Clone)]
@@ -49,364 +50,246 @@ impl LineNumbers {
     }
 }
 
-type LineMap = std::collections::HashMap<(u64, u64), LineNumbers>;
-
-/// Formats a numeric value with appropriate unit suffixes
-///
-/// # Arguments
-/// * `v` - The value to format
-/// * `bit` - If true, formats as bits per second (bps), otherwise as raw count
-fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
-    let value = v.into();
-
-    const GIGA: f64 = 1_000_000_000.0;
-    const MEGA: f64 = 1_000_000.0;
-    const KILO: f64 = 1_000.0;
-
-    if bit {
-        match value {
-            v if v > GIGA => format!("{:.2}_Gbps", v / GIGA),
-            v if v > MEGA => format!("{:.2}_Mbps", v / MEGA),
-            v if v > KILO => format!("{:.2}_Kbps", v / KILO),
-            v => format!("{v:.2}_bps"),
-        }
-    } else {
-        match value {
-            v if v > GIGA => format!("{:.2}G", v / GIGA),
-            v if v > MEGA => format!("{:.2}M", v / MEGA),
-            v if v > KILO => format!("{:.2}K", v / KILO),
-            v => format!("{v:.2}"),
-        }
-    }
-}
-
-type WriterFn =
-    dyn Fn(&mut dyn Write, (i64, i64, i64, i64), Duration) -> Result<()> + Send + Sync + 'static;
-
-pub struct WriterBox {
-    write: Box<WriterFn>,
-    pub style: String,
-}
-
-impl WriterBox {
-    fn new<F>(style: &str, fun: F) -> Self
-    where
-        F: Fn(&mut dyn Write, (i64, i64, i64, i64), Duration) -> Result<()> + Send + Sync + 'static,
-    {
-        Self {
-            write: Box::new(fun),
-            style: style.to_owned(),
-        }
-    }
-
-    pub fn index(s: &str) -> Option<usize> {
-        WRITERS.iter().position(|w| w.style == s)
-    }
-}
-
-static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
-    vec![
-        WriterBox::new(
-            "default",
-            |out: &mut dyn Write, num: (i64, i64, i64, i64), _: Duration| -> Result<()> {
-                write!(out, "{}", Colour::Blue.bold().paint(format!("{}", num.0)))?;
-                Ok(())
-            },
-        ),
-        WriterBox::new(
-            "number+delta",
-            |out: &mut dyn Write, num: (i64, i64, i64, i64), _: Duration| -> Result<()> {
-                write!(out, "{}", Colour::Red.bold().paint(format!("{}", num.0)))?;
-                if num.1 != 0 {
-                    write!(out, ":_{}", Colour::Red.paint(format!("{}", num.1)))?;
-                }
-                Ok(())
-            },
-        ),
-        WriterBox::new(
-            "delta",
-            |out: &mut dyn Write, num: (i64, i64, i64, i64), _: Duration| -> Result<()> {
-                write!(out, ":{}", Colour::Red.bold().paint(format!("{}", num.1)))?;
-                Ok(())
-            },
-        ),
-        WriterBox::new(
-            "fancy",
-            |out: &mut dyn Write, num: (i64, i64, i64, i64), interval: Duration| -> Result<()> {
-                if num.1 != 0 {
-                    let delta = num.1 as f64 / interval.as_secs_f64();
-                    write!(
-                        out,
-                        "{}",
-                        Colour::Purple
-                            .bold()
-                            .paint(format_number(delta, false).to_string())
-                    )?;
-                    Ok(())
-                } else {
-                    write!(out, "{}", Colour::Purple.bold().paint(format!("{}", num.0)))?;
-                    Ok(())
-                }
-            },
-        ),
-        WriterBox::new(
-            "fancy-network",
-            |out: &mut dyn Write, num: (i64, i64, i64, i64), interval: Duration| -> Result<()> {
-                if num.1 != 0 {
-                    let delta = (num.1 * 8) as f64 / interval.as_secs_f64();
-                    write!(
-                        out,
-                        "{}",
-                        Colour::Green
-                            .bold()
-                            .paint(format_number(delta, true).to_string())
-                    )?;
-                    Ok(())
-                } else {
-                    write!(out, "{}", Colour::Green.bold().paint(format!("{}", num.0)))?;
-                    Ok(())
-                }
-            },
-        ),
-        WriterBox::new(
-            "stats",
-            |out: &mut dyn Write, num: (i64, i64, i64, i64), _: Duration| -> Result<()> {
-                write!(out, "{}", Colour::Cyan.bold().paint(format!("{}", num.0)))?;
-                if num.1 != 0 {
-                    write!(out, "_{}", Colour::Cyan.paint(format!("{}", num.1)))?;
-                    write!(
-                        out,
-                        "_{}",
-                        Colour::Cyan.bold().paint(format!("{}/{}", num.2, num.3))
-                    )?;
-                }
-                Ok(())
-            },
-        ),
-        WriterBox::new(
-            "stats-network",
-            |out: &mut dyn Write, num: (i64, i64, i64, i64), interval: Duration| -> Result<()> {
-                if num.1 != 0 {
-                    let delta = num.1 as f64 * 8.0 / interval.as_secs_f64();
-                    write!(
-                        out,
-                        "{}",
-                        Colour::Green
-                            .bold()
-                            .paint(format_number(delta, true).to_string())
-                    )?;
-                    write!(
-                        out,
-                        "_{}",
-                        Colour::Green.bold().paint(format!(
-                            "{}/{}",
-                            format_number(num.2 as f64 * 8.0 / interval.as_secs_f64(), true),
-                            format_number(num.3 as f64 * 8.0 / interval.as_secs_f64(), true)
-                        ))
-                    )?;
-                    Ok(())
-                } else {
-                    write!(out, "{}", Colour::Green.bold().paint(format!("{}", num.0)))?;
-                    Ok(())
-                }
-            },
-        ),
-    ]
-});
+type LineMap = std::collections::HashMap<(usize, u64), LineNumbers>;
 
 /// Main state container for the dwatch application
-pub struct DwatchState {
+pub struct Dwatch {
     /// Parser for extracting numeric ranges from text
     range_parser: RangeParser,
     /// Maps line identifiers to their numeric statistics
-    line_map: LineMap,
+    line_map: RefCell<LineMap>,
+    /// Interval between consecutive runs
+    interval: Duration,
 }
 
-impl DwatchState {
-    pub fn new() -> Self {
+#[derive(Debug, Copy, Clone)]
+pub struct Focus(Option<usize>);
+
+impl Display for Focus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(value) = self.0 {
+            write!(f, "(focus:{value})")
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Dwatch {
+    pub fn new(interval: Duration) -> Self {
         Self {
             range_parser: RangeParser::new(|c| {
                 c.is_ascii_whitespace() || ".,:;()[]{}<>'`\"|=".contains(c)
             }),
-            line_map: LineMap::new(),
+            line_map: RefCell::new(LineMap::new()),
+            interval,
         }
     }
-}
 
-pub fn run(opt: Options) -> Result<()> {
-    let interval = Duration::from_secs(opt.interval.unwrap_or(1));
-    let opt = Arc::new(opt);
-    let mutex = parking_lot::Mutex::new(());
-    let mut state = DwatchState::new();
+    pub fn run(self, opt: Options) -> Result<()> {
+        let opt = Arc::new(opt);
+        let mutex = parking_lot::Mutex::new(());
 
-    print!("{}", ansi_escapes::ClearScreen);
+        let (mut next, end) = {
+            let now = Instant::now();
+            (
+                now + self.interval,
+                now + Duration::from_secs(opt.seconds.unwrap_or(AVERAGE_SECONDS_IN_YEAR * 100)),
+            )
+        };
 
-    let (mut next, end) = {
-        let now = Instant::now();
-        (
-            now + interval,
-            now + Duration::from_secs(opt.seconds.unwrap_or(AVERAGE_SECONDS_IN_YEAR * 100)),
-        )
-    };
+        // Pre-allocate thread handles vector
+        let mut thread_handles: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
 
-    // Pre-allocate thread handles vector
-    let mut thread_handles: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
+        while Instant::now() < end {
+            let w_idx = STYLE.load(Ordering::Relaxed) % WRITERS.len();
 
-    while Instant::now() < end {
-        if TERM.load(Ordering::Relaxed) {
-            eprintln!("SIGTERM");
-            break;
-        }
-
-        for cmd in &opt.commands {
-            let cmd = cmd.clone();
-            let opt = Arc::clone(&opt);
-            thread_handles.push(std::thread::spawn(move || run_command(&cmd, opt).unwrap()));
-        }
-
-        print!("{}", ansi_escapes::CursorTo::TopLeft);
-
-        let widx = STYLE.load(Ordering::Relaxed) % WRITERS.len();
-
-        if !opt.no_banner {
-            println!(
-                "Every {} ms, style {}: {}{}\n",
-                interval.as_millis(),
-                WRITERS[widx].style,
-                opt.commands.join(" | "),
-                ansi_escapes::EraseEndLine
+            print!(
+                "{}{}",
+                ansi_escapes::ClearScreen,
+                ansi_escapes::CursorTo::TopLeft
             );
-        }
 
-        let mut lineno = 0u64;
+            let focus = Self::build_focus();
 
-        for th in thread_handles.drain(..) {
-            let output = th
-                .join()
-                .map_err(|e| -> anyhow::Error { anyhow!("Thread Join error: {:?}", e) })?;
-
-            // transform and print the output, line by line
-            for line in output.lines() {
-                writeln_line(
-                    &mut std::io::stdout(),
-                    widx,
-                    (line, lineno),
-                    &mut state,
-                    interval,
-                )?;
-                lineno += 1;
-            }
-        }
-
-        write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
-        std::io::stdout().flush()?;
-
-        let mut guard = mutex.lock();
-        let timeo_res = WAIT.wait_until(&mut guard, next);
-        if timeo_res.timed_out() {
-            next += interval;
-        }
-    }
-
-    Ok(())
-}
-
-fn writeln_line(
-    out: &mut dyn Write,
-    widx: usize,
-    line: (&str, u64),
-    state: &mut DwatchState,
-    interval: Duration,
-) -> Result<()> {
-    let ranges = state.range_parser.get_numeric_ranges(line.0);
-    let strings = parse_strings(line.0, &ranges);
-    let numbers = parse_numbers(line.0, &ranges)?;
-    let key = (line.1, chunks_fingerprint(&strings));
-
-    let line_stat = state
-        .line_map
-        .entry(key)
-        .or_insert(LineNumbers::new(numbers.clone()));
-
-    let line_stat = {
-        if numbers.len() == line_stat.values.len() {
-            let mut deltas = Vec::with_capacity(numbers.len());
-
-            for (a, b) in numbers.iter().zip(line_stat.values.iter()) {
-                deltas.push(a - b);
-            }
-            line_stat.values = numbers.clone();
-            line_stat.delta = deltas;
-
-            for (min, max, value) in
-                multizip((&mut line_stat.min, &mut line_stat.max, &line_stat.delta))
-            {
-                *min = std::cmp::min(*min, *value);
-                *max = std::cmp::max(*max, *value);
+            if !opt.no_banner {
+                println!(
+                    "Every {} ms, style {}: {}{} {focus}\n",
+                    self.interval.as_millis(),
+                    WRITERS[w_idx].style,
+                    opt.commands.join(" | "),
+                    ansi_escapes::EraseEndLine
+                );
             }
 
-            line_stat
-        } else {
-            line_stat.values = numbers.clone();
-            line_stat.delta = vec![0; numbers.len()];
-            line_stat.min = vec![0; numbers.len()];
-            line_stat.max = vec![0; numbers.len()];
-            line_stat
-        }
-    };
+            let (mut line_no, mut num_no): (usize, usize) = (0, 0);
 
-    writeln_data(out, widx, &strings, line_stat, &ranges, interval)
-}
+            for cmd in &opt.commands {
+                let cmd = cmd.clone();
+                let opt = Arc::clone(&opt);
+                thread_handles.push(std::thread::spawn(move || {
+                    run_command(&cmd, opt).unwrap_or_else(|e| format!("{e}"))
+                }));
+            }
 
-fn writeln_data(
-    out: &mut dyn Write,
-    widx: usize,
-    strings: &[&str],
-    stat: &LineNumbers,
-    ranges: &[Range<usize>],
-    interval: Duration,
-) -> Result<()> {
-    let first_is_number = !ranges.is_empty() && ranges[0].start == 0;
+            for th in thread_handles.drain(..) {
+                let output = th
+                    .join()
+                    .map_err(|e| -> anyhow::Error { anyhow!("Thread Join error: {:?}", e) })?;
 
-    for chunk in izip!(
-        stat.values.iter().copied(),
-        stat.delta.iter().copied(),
-        stat.min.iter().copied(),
-        stat.max.iter().copied(),
-    )
-    .zip_longest(strings.iter())
-    {
-        match chunk {
-            Both(numbers, string) => {
-                if first_is_number {
-                    write_number(out, widx, numbers, interval)?;
-                    write!(out, "{string}")?;
-                } else {
-                    write!(out, "{string}")?;
-                    write_number(out, widx, numbers, interval)?;
+                // transform and print the output, line by line
+                for line in output.lines() {
+                    num_no += self.writeln_line(
+                        &mut std::io::stdout(),
+                        w_idx,
+                        (line, line_no, num_no),
+                        focus,
+                    )?;
+                    line_no += 1;
                 }
             }
-            Left(numbers) => {
-                write_number(out, widx, numbers, interval)?;
+
+            write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
+            std::io::stdout().flush()?;
+
+            if TERM.load(Ordering::Relaxed) {
+                eprintln!("SIGTERM");
+                break;
             }
-            Right(string) => {
-                write!(out, "{string}")?;
+
+            let mut guard = mutex.lock();
+            let timeo_res = WAIT.wait_until(&mut guard, next);
+            if timeo_res.timed_out() {
+                next += self.interval;
             }
+        }
+
+        Ok(())
+    }
+
+    fn build_focus() -> Focus {
+        let mut focus = FOCUS.lock();
+        let value = *focus;
+        if FOCUS_RUN.fetch_add(1, Ordering::Acquire) > FOCUS_PERIOD {
+            *focus = None;
+            Focus(None)
+        } else {
+            Focus(value)
         }
     }
 
-    writeln!(out, "{}", ansi_escapes::EraseEndLine)?;
-    Ok(())
-}
+    fn writeln_line(
+        &self,
+        out: &mut dyn Write,
+        w_idx: usize,
+        line: (&str, usize, usize),
+        focus: Focus,
+    ) -> Result<usize> {
+        let ranges = self.range_parser.get_numeric_ranges(line.0);
+        let strings = parse_strings(line.0, &ranges);
+        let numbers = parse_numbers(line.0, &ranges)?;
+        let key = (line.1, chunks_fingerprint(&strings));
 
-#[inline]
-fn write_number(
-    out: &mut dyn Write,
-    widx: usize,
-    numbers: (i64, i64, i64, i64),
-    interval: Duration,
-) -> Result<()> {
-    (WRITERS[widx].write)(out, numbers, interval)
+        let mut line_map = self.line_map.borrow_mut();
+
+        let line_stat = line_map
+            .entry(key)
+            .or_insert(LineNumbers::new(numbers.clone()));
+
+        let total_numbers_in_line = numbers.len();
+
+        let line_stat = {
+            if total_numbers_in_line == line_stat.values.len() {
+                let mut deltas = Vec::with_capacity(numbers.len());
+
+                for (a, b) in numbers.iter().zip(line_stat.values.iter()) {
+                    deltas.push(a - b);
+                }
+                line_stat.values = numbers.clone();
+                line_stat.delta = deltas;
+
+                for (min, max, value) in
+                    multizip((&mut line_stat.min, &mut line_stat.max, &line_stat.delta))
+                {
+                    *min = std::cmp::min(*min, *value);
+                    *max = std::cmp::max(*max, *value);
+                }
+
+                line_stat
+            } else {
+                line_stat.values = numbers.clone();
+                line_stat.delta = vec![0; numbers.len()];
+                line_stat.min = vec![0; numbers.len()];
+                line_stat.max = vec![0; numbers.len()];
+                line_stat
+            }
+        };
+
+        self.writeln_data(out, w_idx, &strings, line_stat, &ranges, (focus, line.2))?;
+        Ok(total_numbers_in_line)
+    }
+
+    fn writeln_data(
+        &self,
+        out: &mut dyn Write,
+        w_idx: usize,
+        strings: &[&str],
+        line_stat: &LineNumbers,
+        ranges: &[Range<usize>],
+        (focus, initial_idx): (Focus, usize),
+    ) -> Result<()> {
+        let first_is_number = !ranges.is_empty() && ranges[0].start == 0;
+
+        for (idx, chunk) in izip!(
+            line_stat.values.iter().copied(),
+            line_stat.delta.iter().copied(),
+            line_stat.min.iter().copied(),
+            line_stat.max.iter().copied(),
+        )
+        .zip_longest(strings.iter())
+        .enumerate()
+        {
+            let absolute_idx = initial_idx + idx;
+            let cur_focus = focus.0.map(|f| f == absolute_idx).unwrap_or_default();
+
+            match chunk {
+                Both(number, string) => {
+                    if first_is_number {
+                        self.write_number(out, w_idx, &number, cur_focus, absolute_idx)?;
+                        write!(out, "{string}")?;
+                    } else {
+                        write!(out, "{string}")?;
+                        self.write_number(out, w_idx, &number, cur_focus, absolute_idx)?;
+                    }
+                }
+                Left(number) => {
+                    self.write_number(out, w_idx, &number, cur_focus, absolute_idx)?;
+                }
+                Right(string) => {
+                    write!(out, "{string}")?;
+                }
+            }
+        }
+
+        writeln!(out, "{}", ansi_escapes::EraseEndLine)?;
+        Ok(())
+    }
+
+    #[inline]
+    fn write_number(
+        &self,
+        out: &mut dyn Write,
+        w_idx: usize,
+        numbers: &(i64, i64, i64, i64),
+        focus: bool,
+        idx: usize,
+    ) -> Result<()> {
+        let style_index = STYLE_MAP
+            .get(&idx)
+            .map(|r| r.load(Ordering::Relaxed))
+            .unwrap_or(w_idx);
+        (WRITERS[style_index % WRITERS.len()].write)(out, numbers, self.interval, focus)
+    }
 }
 
 fn run_command(cmd: &str, _opt: Arc<Options>) -> Result<String> {
@@ -510,21 +393,6 @@ mod tests {
         assert_eq!(numbers[0], 1234);
         assert_eq!(numbers[1], 5678);
         Ok(())
-    }
-
-    #[test]
-    fn test_format_number() {
-        // Test without bit formatting
-        assert_eq!(format_number(500.0, false), "500.00");
-        assert_eq!(format_number(1500.0, false), "1.50K");
-        assert_eq!(format_number(1_500_000.0, false), "1.50M");
-        assert_eq!(format_number(1_500_000_000.0, false), "1.50G");
-
-        // Test with bit formatting
-        assert_eq!(format_number(500.0, true), "500.00_bps");
-        assert_eq!(format_number(1500.0, true), "1.50_Kbps");
-        assert_eq!(format_number(1_500_000.0, true), "1.50_Mbps");
-        assert_eq!(format_number(1_500_000_000.0, true), "1.50_Gbps");
     }
 
     #[test]

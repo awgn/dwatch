@@ -1,10 +1,13 @@
 mod dwatch;
 mod options;
 mod ranges;
+mod styles;
 
 use anyhow::Result;
 use clap::Parser;
+use dashmap::DashMap;
 use options::Options;
+use parking_lot::Mutex;
 use signal_hook::consts::signal::*;
 use signal_hook::consts::TERM_SIGNALS;
 use signal_hook::iterator::exfiltrator::SignalOnly;
@@ -13,10 +16,17 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::LazyLock;
+use std::time::Duration;
+
+use crate::dwatch::Dwatch;
 
 static TERM: AtomicBool = AtomicBool::new(false);
 static STYLE: AtomicUsize = AtomicUsize::new(0);
-static WAIT: LazyLock<parking_lot::Condvar> = LazyLock::new(|| parking_lot::Condvar::new());
+static STYLE_MAP: LazyLock<DashMap<usize, AtomicUsize>> = LazyLock::new(DashMap::new);
+static WAIT: LazyLock<parking_lot::Condvar> = LazyLock::new(parking_lot::Condvar::new);
+
+static FOCUS: Mutex<Option<usize>> = Mutex::new(None);
+static FOCUS_RUN: AtomicUsize = AtomicUsize::new(0);
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -27,7 +37,7 @@ fn main() -> Result<()> {
     STYLE.store(
         opts.style
             .as_ref()
-            .and_then(|name| dwatch::WriterBox::index(name))
+            .and_then(|name| styles::WriterBox::index(name))
             .unwrap_or(0),
         Ordering::Relaxed,
     );
@@ -47,10 +57,33 @@ fn main() -> Result<()> {
                     break;
                 }
                 SIGTSTP => {
-                    // TODO...
+                    let mut focus = FOCUS.lock();
+                    match focus.as_mut() {
+                        Some(f) => {
+                            *f += 1;
+                        }
+                        None => {
+                            *focus = Some(0);
+                        }
+                    }
+
+                    FOCUS_RUN.store(0, Ordering::Release);
+                    WAIT.notify_one();
                 }
                 SIGQUIT => {
-                    STYLE.fetch_add(1, Ordering::Relaxed);
+                    let focus = FOCUS.lock();
+                    if let Some(idx) = *focus {
+                        STYLE_MAP
+                            .entry(idx)
+                            .and_modify(|counter| {
+                                counter.fetch_add(1, Ordering::Relaxed);
+                            })
+                            .or_insert_with(|| AtomicUsize::new(0));
+                        FOCUS_RUN.store(0, Ordering::Release);
+                    } else {
+                        STYLE.fetch_add(1, Ordering::Relaxed);
+                    }
+
                     WAIT.notify_one();
                 }
                 _ => {}
@@ -62,5 +95,6 @@ fn main() -> Result<()> {
         opts.commands = vec![opts.commands.join(" ")];
     }
 
-    dwatch::run(opts)
+    let dwatch = Dwatch::new(Duration::from_secs(opts.interval.unwrap_or(1)));
+    dwatch.run(opts)
 }
