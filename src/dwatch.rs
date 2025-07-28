@@ -13,16 +13,17 @@ use std::{
 use anyhow::{anyhow, Result};
 use itertools::Itertools;
 use itertools::{
-    izip, multizip,
+    izip,
     EitherOrBoth::{Both, Left, Right},
 };
 
-use crate::{options::Options, FOCUS, FOCUS_RUN};
+use crate::{options::Options, FOCUS, FOCUS_RUN, FOCUS_TOTAL};
 use crate::{ranges::RangeParser, styles::WRITERS};
 use crate::{STYLE, STYLE_MAP, TERM, WAIT};
+use wait_timeout::ChildExt;
 
 const AVERAGE_SECONDS_IN_YEAR: u64 = 31_556_952;
-const FOCUS_PERIOD: usize = 3;
+const FOCUS_PERIOD: usize = 5;
 
 /// Tracks numeric values from a line of text over time, computing deltas and statistics
 #[derive(Debug, Clone)]
@@ -31,21 +32,14 @@ struct LineNumbers {
     values: Vec<i64>,
     /// Change from previous values (current - previous)
     delta: Vec<i64>,
-    /// Minimum delta observed for each position
-    min: Vec<i64>,
-    /// Maximum delta observed for each position
-    max: Vec<i64>,
 }
 
 impl LineNumbers {
     /// Creates a new LineNumbers instance with initial values
     fn new(numbers: Vec<i64>) -> Self {
-        let len = numbers.len();
         Self {
             values: numbers.clone(),
             delta: numbers,
-            min: vec![0; len],
-            max: vec![0; len],
         }
     }
 }
@@ -128,7 +122,7 @@ impl Dwatch {
                 let cmd = cmd.clone();
                 let opt = Arc::clone(&opt);
                 thread_handles.push(std::thread::spawn(move || {
-                    run_command(&cmd, opt).unwrap_or_else(|e| format!("{e}"))
+                    run_command(&cmd, opt, self.interval).unwrap_or_else(|e| format!("{e}"))
                 }));
             }
 
@@ -151,6 +145,8 @@ impl Dwatch {
 
             write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
             std::io::stdout().flush()?;
+
+            FOCUS_TOTAL.store(num_no, Ordering::Relaxed);
 
             if TERM.load(Ordering::Relaxed) {
                 eprintln!("SIGTERM");
@@ -207,20 +203,10 @@ impl Dwatch {
                 }
                 line_stat.values = numbers.clone();
                 line_stat.delta = deltas;
-
-                for (min, max, value) in
-                    multizip((&mut line_stat.min, &mut line_stat.max, &line_stat.delta))
-                {
-                    *min = std::cmp::min(*min, *value);
-                    *max = std::cmp::max(*max, *value);
-                }
-
                 line_stat
             } else {
                 line_stat.values = numbers.clone();
                 line_stat.delta = vec![0; numbers.len()];
-                line_stat.min = vec![0; numbers.len()];
-                line_stat.max = vec![0; numbers.len()];
                 line_stat
             }
         };
@@ -243,8 +229,6 @@ impl Dwatch {
         for (idx, chunk) in izip!(
             line_stat.values.iter().copied(),
             line_stat.delta.iter().copied(),
-            line_stat.min.iter().copied(),
-            line_stat.max.iter().copied(),
         )
         .zip_longest(strings.iter())
         .enumerate()
@@ -280,7 +264,7 @@ impl Dwatch {
         &self,
         out: &mut dyn Write,
         w_idx: usize,
-        numbers: &(i64, i64, i64, i64),
+        numbers: &(i64, i64),
         focus: bool,
         idx: usize,
     ) -> Result<()> {
@@ -292,33 +276,58 @@ impl Dwatch {
     }
 }
 
-fn run_command(cmd: &str, _opt: Arc<Options>) -> Result<String> {
-    let output = std::process::Command::new("sh")
+fn run_command(cmd: &str, _opt: Arc<Options>, timeout: Duration) -> Result<String> {
+    // Spawn the child process, but keep it mutable to kill it later if needed
+    let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
-        .output()
-        .map_err(|e| anyhow!("Failed to execute command '{}': {}", cmd, e))?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("Failed to spawn command '{}': {}", cmd, e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if !stderr.is_empty() {
-            return Err(anyhow!(
-                "Command '{}' failed with stderr: {}",
-                cmd,
-                stderr.trim()
-            ));
+    // Wait for the process with a timeout
+    match child.wait_timeout(timeout)? {
+        // The process finished within the time limit
+        Some(status) => {
+            // Since it finished, we can now safely collect its full output
+            let output = child.wait_with_output()?;
+
+            if !status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if !stderr.is_empty() {
+                    return Err(anyhow!(
+                        "Command '{}' failed with stderr: {}",
+                        cmd,
+                        stderr.trim()
+                    ));
+                }
+                return Err(anyhow!(
+                    "Command '{}' failed with exit code: {:?}",
+                    cmd,
+                    output.status.code()
+                ));
+            }
+
+            // Avoid unnecessary allocation if output is already valid UTF-8
+            match String::from_utf8(output.stdout) {
+                Ok(s) => Ok(s),
+                Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+            }
         }
-        return Err(anyhow!(
-            "Command '{}' failed with exit code: {:?}",
-            cmd,
-            output.status.code()
-        ));
-    }
+        // The timeout was reached, the process is still running
+        None => {
+            // Kill the process to prevent it from running forever
+            child.kill()?;
+            // Wait for the now-killed process to be cleaned up by the OS
+            child.wait()?;
 
-    // Avoid unnecessary allocation if output is already valid UTF-8
-    match String::from_utf8(output.stdout) {
-        Ok(s) => Ok(s),
-        Err(e) => Ok(String::from_utf8_lossy(e.as_bytes()).into_owned()),
+            Err(anyhow!(
+                "Command '{}' timed out after {} seconds and was killed",
+                cmd,
+                timeout.as_secs()
+            ))
+        }
     }
 }
 

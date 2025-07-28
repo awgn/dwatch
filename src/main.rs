@@ -24,9 +24,9 @@ static TERM: AtomicBool = AtomicBool::new(false);
 static STYLE: AtomicUsize = AtomicUsize::new(0);
 static STYLE_MAP: LazyLock<DashMap<usize, AtomicUsize>> = LazyLock::new(DashMap::new);
 static WAIT: LazyLock<parking_lot::Condvar> = LazyLock::new(parking_lot::Condvar::new);
-
 static FOCUS: Mutex<Option<usize>> = Mutex::new(None);
 static FOCUS_RUN: AtomicUsize = AtomicUsize::new(0);
+static FOCUS_TOTAL: AtomicUsize = AtomicUsize::new(0);
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -57,31 +57,36 @@ fn main() -> Result<()> {
                     break;
                 }
                 SIGTSTP => {
-                    let mut focus = FOCUS.lock();
-                    match focus.as_mut() {
-                        Some(f) => {
-                            *f += 1;
-                        }
-                        None => {
-                            *focus = Some(0);
+                    if let Some(mut focus) = FOCUS.try_lock() {
+                        match focus.as_mut() {
+                            Some(f) => {
+                                if (*f + 1) >= FOCUS_TOTAL.load(Ordering::Relaxed) {
+                                    *f = 0;
+                                } else {
+                                    *f += 1;
+                                }
+                            }
+                            None => {
+                                *focus = Some(0);
+                            }
                         }
                     }
-
                     FOCUS_RUN.store(0, Ordering::Release);
                     WAIT.notify_one();
                 }
                 SIGQUIT => {
-                    let focus = FOCUS.lock();
-                    if let Some(idx) = *focus {
-                        STYLE_MAP
-                            .entry(idx)
-                            .and_modify(|counter| {
-                                counter.fetch_add(1, Ordering::Relaxed);
-                            })
-                            .or_insert_with(|| AtomicUsize::new(0));
-                        FOCUS_RUN.store(0, Ordering::Release);
-                    } else {
-                        STYLE.fetch_add(1, Ordering::Relaxed);
+                    if let Some(focus) = FOCUS.try_lock() {
+                        if let Some(idx) = *focus {
+                            STYLE_MAP
+                                .entry(idx)
+                                .and_modify(|counter| {
+                                    counter.fetch_add(1, Ordering::Relaxed);
+                                })
+                                .or_insert_with(|| AtomicUsize::new(1));
+                            FOCUS_RUN.store(0, Ordering::Release);
+                        } else {
+                            STYLE.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
 
                     WAIT.notify_one();

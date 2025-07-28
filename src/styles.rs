@@ -2,10 +2,8 @@ use ansi_term::{Colour, Style};
 use anyhow::Result;
 use std::{io::Write, sync::LazyLock, time::Duration};
 
-type WriterFn = dyn Fn(&mut dyn Write, &(i64, i64, i64, i64), Duration, bool) -> Result<()>
-    + Send
-    + Sync
-    + 'static;
+type WriterFn =
+    dyn Fn(&mut dyn Write, &(i64, i64), Duration, bool) -> Result<()> + Send + Sync + 'static;
 
 pub struct WriterBox {
     pub write: Box<WriterFn>,
@@ -15,10 +13,7 @@ pub struct WriterBox {
 impl WriterBox {
     pub fn new<F>(style: &str, fun: F) -> Self
     where
-        F: Fn(&mut dyn Write, &(i64, i64, i64, i64), Duration, bool) -> Result<()>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(&mut dyn Write, &(i64, i64), Duration, bool) -> Result<()> + Send + Sync + 'static,
     {
         Self {
             write: Box::new(fun),
@@ -35,132 +30,98 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
     vec![
         WriterBox::new(
             "default",
-            |out: &mut dyn Write,
-             num: &(i64, i64, i64, i64),
-             _: Duration,
-             focus: bool|
-             -> Result<()> {
+            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
                 let style = build_style(Colour::Blue, focus);
                 write!(out, "{}", style.paint(format!("{}", num.0)))?;
                 Ok(())
             },
         ),
         WriterBox::new(
-            "number+delta",
-            |out: &mut dyn Write,
-             num: &(i64, i64, i64, i64),
-             _: Duration,
-             focus: bool|
-             -> Result<()> {
+            "number+(events per interval)",
+            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
                 let style = build_style(Colour::Red, focus);
                 write!(out, "{}", style.paint(format!("{}", num.0)))?;
                 if num.1 != 0 {
-                    write!(out, ":_{}", style.paint(format!("{}", num.1)))?;
+                    write!(out, "⟶{}/i", style.paint(format!("{}", num.1)))?;
                 }
                 Ok(())
             },
         ),
         WriterBox::new(
-            "delta",
+            "number+(events per second)",
             |out: &mut dyn Write,
-             num: &(i64, i64, i64, i64),
-             _: Duration,
+             num: &(i64, i64),
+             interval: Duration,
              focus: bool|
              -> Result<()> {
                 let style = build_style(Colour::Red, focus);
-                write!(out, "{}", style.paint(format!("{}", num.1)))?;
+                write!(out, "{}", style.paint(format!("{}", num.0)))?;
+                if num.1 != 0 {
+                    let rate = num.1 as f64 / interval.as_secs_f64();
+                    write!(out, "⟶{}/s", style.paint(format!("{rate}")))?;
+                }
                 Ok(())
             },
         ),
         WriterBox::new(
-            "fancy",
+            "events per interval",
+            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
+                let style = build_style(Colour::Red, focus);
+                write!(out, "{}/i", style.paint(format!("{}", num.1)))?;
+                Ok(())
+            },
+        ),
+        WriterBox::new(
+            "events per second",
             |out: &mut dyn Write,
-             num: &(i64, i64, i64, i64),
+             num: &(i64, i64),
+             interval: Duration,
+             focus: bool|
+             -> Result<()> {
+                let style = build_style(Colour::Red, focus);
+                let rate = num.1 as f64 / interval.as_secs_f64();
+                write!(out, "{}/s", style.paint(format!("{rate}")))?;
+                Ok(())
+            },
+        ),
+        WriterBox::new(
+            "engineering",
+            |out: &mut dyn Write,
+             num: &(i64, i64),
              interval: Duration,
              focus: bool|
              -> Result<()> {
                 let style = build_style(Colour::Purple, focus);
-                if num.1 != 0 {
-                    let delta = num.1 as f64 / interval.as_secs_f64();
-                    write!(
-                        out,
-                        "{}",
-                        style.paint(format_number(delta, false).to_string())
-                    )?;
-                    Ok(())
-                } else {
-                    write!(out, "{}", style.paint(format!("{}", num.0)))?;
-                    Ok(())
-                }
-            },
-        ),
-        WriterBox::new(
-            "fancy-network",
-            |out: &mut dyn Write,
-             num: &(i64, i64, i64, i64),
-             interval: Duration,
-             focus: bool|
-             -> Result<()> {
-                let style = build_style(Colour::Green, focus);
-                if num.1 != 0 {
-                    let delta = (num.1 * 8) as f64 / interval.as_secs_f64();
-                    write!(
-                        out,
-                        "{}",
-                        style.paint(format_number(delta, true).to_string())
-                    )?;
-                    Ok(())
-                } else {
-                    write!(out, "{}", style.paint(format!("{}", num.0)))?;
-                    Ok(())
-                }
-            },
-        ),
-        WriterBox::new(
-            "stats",
-            |out: &mut dyn Write,
-             num: &(i64, i64, i64, i64),
-             _: Duration,
-             focus: bool|
-             -> Result<()> {
-                let style = build_style(Colour::Cyan, focus);
                 write!(out, "{}", style.paint(format!("{}", num.0)))?;
                 if num.1 != 0 {
-                    write!(out, "_{}", style.paint(format!("{}", num.1)))?;
-                    write!(out, "_{}", style.paint(format!("{}/{}", num.2, num.3)))?;
+                    let rate = num.1 as f64 / interval.as_secs_f64();
+                    write!(
+                        out,
+                        "⟶{}/s",
+                        style.paint(format_number(rate, false).to_string())
+                    )?;
                 }
                 Ok(())
             },
         ),
         WriterBox::new(
-            "stats-network",
+            "networking",
             |out: &mut dyn Write,
-             num: &(i64, i64, i64, i64),
+             num: &(i64, i64),
              interval: Duration,
              focus: bool|
              -> Result<()> {
                 let style = build_style(Colour::Green, focus);
+                write!(out, "{}", style.paint(format!("{}", num.0)))?;
                 if num.1 != 0 {
-                    let delta = num.1 as f64 * 8.0 / interval.as_secs_f64();
+                    let bit_rate = (num.1 * 8) as f64 / interval.as_secs_f64();
                     write!(
                         out,
-                        "{}",
-                        style.paint(format_number(delta, true).to_string())
+                        "⟶{}/s",
+                        style.paint(format_number(bit_rate, true).to_string())
                     )?;
-                    write!(
-                        out,
-                        "_{}",
-                        style.paint(format!(
-                            "{}/{}",
-                            format_number(num.2 as f64 * 8.0 / interval.as_secs_f64(), true),
-                            format_number(num.3 as f64 * 8.0 / interval.as_secs_f64(), true)
-                        ))
-                    )?;
-                    Ok(())
-                } else {
-                    write!(out, "{}", style.paint(format!("{}", num.0)))?;
-                    Ok(())
                 }
+                Ok(())
             },
         ),
     ]
@@ -180,9 +141,9 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
 
     if bit {
         match value {
-            v if v > GIGA => format!("{:.2}_Gbps", v / GIGA),
-            v if v > MEGA => format!("{:.2}_Mbps", v / MEGA),
-            v if v > KILO => format!("{:.2}_Kbps", v / KILO),
+            v if v > GIGA => format!("{:.2}Gbps", v / GIGA),
+            v if v > MEGA => format!("{:.2}Mbps", v / MEGA),
+            v if v > KILO => format!("{:.2}Kbps", v / KILO),
             v => format!("{v:.2}_bps"),
         }
     } else {
