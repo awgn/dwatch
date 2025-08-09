@@ -17,9 +17,9 @@ use itertools::{
     EitherOrBoth::{Both, Left, Right},
 };
 
-use crate::{options::Options, FOCUS, FOCUS_RUN, FOCUS_TOTAL};
+use crate::{options::Options, styles::STYLE_MAP, FOCUS, FOCUS_RUN, FOCUS_TOTAL};
 use crate::{ranges::RangeParser, styles::WRITERS};
-use crate::{STYLE, STYLE_MAP, TERM, WAIT};
+use crate::{STYLE, TERM, WAIT};
 use wait_timeout::ChildExt;
 
 const AVERAGE_SECONDS_IN_YEAR: u64 = 31_556_952;
@@ -119,8 +119,8 @@ impl Dwatch {
             let (mut line_no, mut num_no): (usize, usize) = (0, 0);
 
             for cmd in &opt.commands {
-                let cmd = cmd.clone();
                 let opt = Arc::clone(&opt);
+                let cmd = cmd.clone();
                 thread_handles.push(std::thread::spawn(move || {
                     run_command(&cmd, opt, self.interval).unwrap_or_else(|e| format!("{e}"))
                 }));

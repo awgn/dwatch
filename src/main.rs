@@ -5,7 +5,6 @@ mod styles;
 
 use anyhow::Result;
 use clap::Parser;
-use dashmap::DashMap;
 use options::Options;
 use parking_lot::Mutex;
 use signal_hook::consts::signal::*;
@@ -19,14 +18,24 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::dwatch::Dwatch;
+use crate::styles::load_style_map;
+use crate::styles::save_style_map;
+use crate::styles::STYLE_MAP;
 
 static TERM: AtomicBool = AtomicBool::new(false);
 static STYLE: AtomicUsize = AtomicUsize::new(0);
-static STYLE_MAP: LazyLock<DashMap<usize, AtomicUsize>> = LazyLock::new(DashMap::new);
 static WAIT: LazyLock<parking_lot::Condvar> = LazyLock::new(parking_lot::Condvar::new);
 static FOCUS: Mutex<Option<usize>> = Mutex::new(None);
 static FOCUS_RUN: AtomicUsize = AtomicUsize::new(0);
 static FOCUS_TOTAL: AtomicUsize = AtomicUsize::new(0);
+
+fn normalize_cmds<I, S>(strings: I) -> impl Iterator<Item = String>
+where
+    I: Iterator<Item = S>,
+    S: AsRef<str>,
+{
+    strings.map(|s| s.as_ref().split_whitespace().collect::<Vec<_>>().join(" "))
+}
 
 fn main() -> Result<()> {
     let mut opts = Options::parse();
@@ -42,6 +51,15 @@ fn main() -> Result<()> {
         Ordering::Relaxed,
     );
 
+    opts.commands = normalize_cmds(opts.commands.iter()).collect();
+    if !opts.multiple_commands {
+        opts.commands = vec![opts.commands.join(" ")];
+    }
+
+    load_style_map(&opts.commands)?;
+
+    let cmds = opts.commands.clone();
+
     std::thread::spawn(move || {
         let mut sigs = vec![SIGTSTP, SIGWINCH];
 
@@ -54,6 +72,9 @@ fn main() -> Result<()> {
                 SIGTERM | SIGINT => {
                     TERM.store(true, Ordering::Relaxed);
                     WAIT.notify_one();
+                    if let Err(e) = save_style_map(&cmds) {
+                        eprintln!("Failed to save style map: {}", e);
+                    };
                     break;
                 }
                 SIGTSTP => {
@@ -95,10 +116,6 @@ fn main() -> Result<()> {
             }
         }
     });
-
-    if !opts.multiple_commands {
-        opts.commands = vec![opts.commands.join(" ")];
-    }
 
     let dwatch = Dwatch::new(Duration::from_secs(opts.interval.unwrap_or(1)));
     dwatch.run(opts)

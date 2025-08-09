@@ -1,6 +1,114 @@
 use ansi_term::{Colour, Style};
 use anyhow::Result;
-use std::{io::Write, sync::LazyLock, time::Duration};
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashMap,
+    fs,
+    io::Write,
+    path::PathBuf,
+    sync::{atomic::AtomicUsize, LazyLock},
+    time::Duration,
+};
+
+pub static STYLE_MAP: LazyLock<DashMap<usize, AtomicUsize>> = LazyLock::new(DashMap::new);
+
+pub fn load_style_map(cmd: &[String]) -> Result<()> {
+    let key = cmd.join(" ").trim().to_owned();
+    let config_path = get_config_path()?;
+
+    if !config_path.exists() {
+        return Ok(()); // No config file exists yet
+    }
+
+    let content = fs::read_to_string(&config_path)?;
+    if content.trim().is_empty() {
+        return Ok(()); // Empty file
+    }
+
+    // Parse NDJSON format
+    let mut command_styles: HashMap<String, HashMap<usize, usize>> = HashMap::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry: CommandStyleEntry = serde_json::from_str(line)?;
+        command_styles.insert(entry.command, entry.styles);
+    }
+
+    // Load styles for the specific command
+    if let Some(styles) = command_styles.get(&key) {
+        STYLE_MAP.clear();
+        for (key, value) in styles {
+            STYLE_MAP.insert(*key, AtomicUsize::new(*value));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn save_style_map(cmd: &[String]) -> Result<()> {
+    let key = cmd.join(" ").trim().to_owned();
+    let config_path = get_config_path()?;
+
+    // Ensure config directory exists
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Read existing entries
+    let mut command_styles: HashMap<String, HashMap<usize, usize>> = HashMap::new();
+    if config_path.exists() {
+        let content = fs::read_to_string(&config_path)?;
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let entry: CommandStyleEntry = serde_json::from_str(line)?;
+            command_styles.insert(entry.command, entry.styles);
+        }
+    }
+
+    // Update with current STYLE_MAP for this command
+    let current_styles: HashMap<usize, usize> = STYLE_MAP
+        .iter()
+        .map(|entry| {
+            (
+                *entry.key(),
+                entry.value().load(std::sync::atomic::Ordering::Relaxed),
+            )
+        })
+        .collect();
+
+    command_styles.insert(key, current_styles);
+
+    // Write back as NDJSON
+    let mut file = fs::File::create(&config_path)?;
+    for (command, styles) in command_styles {
+        let entry = CommandStyleEntry { command, styles };
+        writeln!(file, "{}", serde_json::to_string(&entry)?)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+struct CommandStyleEntry {
+    command: String,
+    styles: HashMap<usize, usize>,
+}
+
+fn get_config_path() -> Result<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| anyhow::anyhow!("Could not determine home directory"))?;
+
+    let mut path = PathBuf::from(home);
+    path.push(".config");
+    path.push("dwatch");
+    path.push("styles.json");
+    Ok(path)
+}
 
 type WriterFn =
     dyn Fn(&mut dyn Write, &(i64, i64), Duration, bool) -> Result<()> + Send + Sync + 'static;
@@ -179,8 +287,8 @@ mod tests {
 
         // Test with bit formatting
         assert_eq!(format_number(500.0, true), "500.00_bps");
-        assert_eq!(format_number(1500.0, true), "1.50_Kbps");
-        assert_eq!(format_number(1_500_000.0, true), "1.50_Mbps");
-        assert_eq!(format_number(1_500_000_000.0, true), "1.50_Gbps");
+        assert_eq!(format_number(1500.0, true), "1.50Kbps");
+        assert_eq!(format_number(1_500_000.0, true), "1.50Mbps");
+        assert_eq!(format_number(1_500_000_000.0, true), "1.50Gbps");
     }
 }

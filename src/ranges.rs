@@ -20,63 +20,63 @@ impl RangeParser {
     }
 
     pub fn get_numeric_ranges(&self, str: &str) -> Vec<Range<usize>> {
-        let mut local_vector = Vec::new();
+        let mut ranges = Vec::new();
 
-        let mut local_state = State::Space;
-        let mut local_point = Range { start: 0, end: 0 };
-        let mut local_index = 0;
+        let mut state = State::Space;
+        let mut point = Range { start: 0, end: 0 };
+        let mut index = 0;
 
         let chars: Peekable<std::str::Chars> = str.chars().peekable();
 
         for c in chars {
-            match local_state {
+            match state {
                 State::None => {
                     if self.heuristic.as_ref()(c) {
-                        local_state = State::Space;
+                        state = State::Space;
                     }
                 }
                 State::Space => {
                     if c.is_ascii_digit() {
-                        local_state = State::Digit;
-                        local_point.start = local_index;
+                        state = State::Digit;
+                        point.start = index;
                     } else if c == '-' || c == '+' {
-                        local_state = State::Sign;
-                        local_point.start = local_index;
+                        state = State::Sign;
+                        point.start = index;
                     } else if !self.heuristic.as_ref()(c) {
-                        local_state = State::None;
+                        state = State::None;
                     }
                 }
                 State::Sign => {
                     if c.is_ascii_digit() {
-                        local_state = State::Digit;
+                        state = State::Digit;
                     } else if c == '-' || c == '+' {
-                        local_state = State::Sign;
-                        local_point.start = local_index;
+                        state = State::Sign;
+                        point.start = index;
                     } else if self.heuristic.as_ref()(c) {
-                        local_state = State::Space;
+                        state = State::Space;
                     } else {
-                        local_state = State::None;
+                        state = State::None;
                     }
                 }
                 State::Digit => {
                     if self.heuristic.as_ref()(c) {
-                        local_point.end = local_index;
-                        local_vector.push(local_point.clone());
-                        local_state = State::Space;
+                        point.end = index;
+                        ranges.push(point.clone());
+                        state = State::Space;
                     } else if !c.is_ascii_digit() {
-                        local_state = State::None;
+                        state = State::None;
                     }
                 }
             }
-            local_index += 1;
+            index += 1;
         }
 
-        if local_state == State::Digit {
-            local_point.end = local_index;
-            local_vector.push(local_point);
+        if state == State::Digit {
+            point.end = index;
+            ranges.push(point);
         }
 
-        local_vector
+        ranges
     }
 }
 
