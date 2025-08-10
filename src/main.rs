@@ -6,7 +6,6 @@ mod styles;
 use anyhow::Result;
 use clap::Parser;
 use options::Options;
-use parking_lot::Mutex;
 use signal_hook::consts::signal::*;
 use signal_hook::consts::TERM_SIGNALS;
 use signal_hook::iterator::exfiltrator::SignalOnly;
@@ -18,16 +17,14 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::dwatch::Dwatch;
-use crate::styles::load_style_map;
-use crate::styles::save_style_map;
-use crate::styles::STYLE_MAP;
+use crate::styles::{
+    load_style_map, save_style_map, FOCUS_INDEX, FOCUS_LIFETIME, FOCUS_STYLE_MAP, GLOBAL_STYLE,
+    TOTAL_FOCUSABLE_ITEMS,
+};
+
+static WAIT: LazyLock<parking_lot::Condvar> = LazyLock::new(parking_lot::Condvar::new);
 
 static TERM: AtomicBool = AtomicBool::new(false);
-static STYLE: AtomicUsize = AtomicUsize::new(0);
-static WAIT: LazyLock<parking_lot::Condvar> = LazyLock::new(parking_lot::Condvar::new);
-static FOCUS: Mutex<Option<usize>> = Mutex::new(None);
-static FOCUS_RUN: AtomicUsize = AtomicUsize::new(0);
-static FOCUS_TOTAL: AtomicUsize = AtomicUsize::new(0);
 
 fn normalize_cmds<I, S>(strings: I) -> impl Iterator<Item = String>
 where
@@ -43,7 +40,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    STYLE.store(
+    GLOBAL_STYLE.store(
         opts.style
             .as_ref()
             .and_then(|name| styles::WriterBox::index(name))
@@ -78,10 +75,11 @@ fn main() -> Result<()> {
                     break;
                 }
                 SIGTSTP => {
-                    if let Some(mut focus) = FOCUS.try_lock() {
+                    println!("SIGTSTP received");
+                    if let Some(mut focus) = FOCUS_INDEX.try_lock() {
                         match focus.as_mut() {
                             Some(f) => {
-                                if (*f + 1) >= FOCUS_TOTAL.load(Ordering::Relaxed) {
+                                if (*f + 1) >= TOTAL_FOCUSABLE_ITEMS.load(Ordering::Relaxed) {
                                     *f = 0;
                                 } else {
                                     *f += 1;
@@ -92,21 +90,21 @@ fn main() -> Result<()> {
                             }
                         }
                     }
-                    FOCUS_RUN.store(0, Ordering::Release);
+                    FOCUS_LIFETIME.store(0, Ordering::Release);
                     WAIT.notify_one();
                 }
                 SIGQUIT => {
-                    if let Some(focus) = FOCUS.try_lock() {
+                    if let Some(focus) = FOCUS_INDEX.try_lock() {
                         if let Some(idx) = *focus {
-                            STYLE_MAP
+                            FOCUS_STYLE_MAP
                                 .entry(idx)
                                 .and_modify(|counter| {
                                     counter.fetch_add(1, Ordering::Relaxed);
                                 })
                                 .or_insert_with(|| AtomicUsize::new(1));
-                            FOCUS_RUN.store(0, Ordering::Release);
+                            FOCUS_LIFETIME.store(0, Ordering::Release);
                         } else {
-                            STYLE.fetch_add(1, Ordering::Relaxed);
+                            GLOBAL_STYLE.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 

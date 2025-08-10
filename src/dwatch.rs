@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::hash_map::DefaultHasher,
-    fmt::Display,
     hash::Hasher,
     io::Write,
     ops::Range,
@@ -17,13 +16,15 @@ use itertools::{
     EitherOrBoth::{Both, Left, Right},
 };
 
-use crate::{options::Options, styles::STYLE_MAP, FOCUS, FOCUS_RUN, FOCUS_TOTAL};
+use crate::{
+    options::Options,
+    styles::{Styles, TOTAL_FOCUSABLE_ITEMS},
+};
 use crate::{ranges::RangeParser, styles::WRITERS};
-use crate::{STYLE, TERM, WAIT};
+use crate::{TERM, WAIT};
 use wait_timeout::ChildExt;
 
 const AVERAGE_SECONDS_IN_YEAR: u64 = 31_556_952;
-const FOCUS_PERIOD: usize = 5;
 
 /// Tracks numeric values from a line of text over time, computing deltas and statistics
 #[derive(Debug, Clone)]
@@ -56,19 +57,6 @@ pub struct Dwatch {
     interval: Duration,
 }
 
-#[derive(Debug, Copy, Clone)]
-pub struct Focus(Option<usize>);
-
-impl Display for Focus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(value) = self.0 {
-            write!(f, "(focus:{value})")
-        } else {
-            Ok(())
-        }
-    }
-}
-
 impl Dwatch {
     pub fn new(interval: Duration) -> Self {
         Self {
@@ -96,7 +84,7 @@ impl Dwatch {
         let mut thread_handles: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
 
         while Instant::now() < end {
-            let w_idx = STYLE.load(Ordering::Relaxed) % WRITERS.len();
+            let styles = Styles::new();
 
             print!(
                 "{}{}",
@@ -104,15 +92,14 @@ impl Dwatch {
                 ansi_escapes::CursorTo::TopLeft
             );
 
-            let focus = Self::build_focus();
-
             if !opt.no_banner {
                 println!(
-                    "Every {} ms, style {}: {}{} {focus}\n",
+                    "Every {} ms, style '{}': {}{} {}\n",
                     self.interval.as_millis(),
-                    WRITERS[w_idx].style,
+                    WRITERS[styles.focus_or_global() % WRITERS.len()].style,
                     opt.commands.join(" | "),
-                    ansi_escapes::EraseEndLine
+                    ansi_escapes::EraseEndLine,
+                    styles.focus()
                 );
             }
 
@@ -133,12 +120,8 @@ impl Dwatch {
 
                 // transform and print the output, line by line
                 for line in output.lines() {
-                    num_no += self.writeln_line(
-                        &mut std::io::stdout(),
-                        w_idx,
-                        (line, line_no, num_no),
-                        focus,
-                    )?;
+                    num_no +=
+                        self.writeln_line(&mut std::io::stdout(), (line, line_no, num_no), styles)?;
                     line_no += 1;
                 }
             }
@@ -146,7 +129,7 @@ impl Dwatch {
             write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
             std::io::stdout().flush()?;
 
-            FOCUS_TOTAL.store(num_no, Ordering::Relaxed);
+            TOTAL_FOCUSABLE_ITEMS.store(num_no, Ordering::Relaxed);
 
             if TERM.load(Ordering::Relaxed) {
                 eprintln!("SIGTERM");
@@ -163,23 +146,11 @@ impl Dwatch {
         Ok(())
     }
 
-    fn build_focus() -> Focus {
-        let mut focus = FOCUS.lock();
-        let value = *focus;
-        if FOCUS_RUN.fetch_add(1, Ordering::Acquire) > FOCUS_PERIOD {
-            *focus = None;
-            Focus(None)
-        } else {
-            Focus(value)
-        }
-    }
-
     fn writeln_line(
         &self,
         out: &mut dyn Write,
-        w_idx: usize,
         line: (&str, usize, usize),
-        focus: Focus,
+        styles: Styles,
     ) -> Result<usize> {
         let ranges = self.range_parser.get_numeric_ranges(line.0);
         let strings = parse_strings(line.0, &ranges);
@@ -211,18 +182,18 @@ impl Dwatch {
             }
         };
 
-        self.writeln_data(out, w_idx, &strings, line_stat, &ranges, (focus, line.2))?;
+        self.writeln_data(out, &strings, line_stat, &ranges, styles, line.2)?;
         Ok(total_numbers_in_line)
     }
 
     fn writeln_data(
         &self,
         out: &mut dyn Write,
-        w_idx: usize,
         strings: &[&str],
         line_stat: &LineNumbers,
         ranges: &[Range<usize>],
-        (focus, initial_idx): (Focus, usize),
+        styles: Styles,
+        initial_idx: usize,
     ) -> Result<()> {
         let first_is_number = !ranges.is_empty() && ranges[0].start == 0;
 
@@ -234,20 +205,18 @@ impl Dwatch {
         .enumerate()
         {
             let absolute_idx = initial_idx + idx;
-            let cur_focus = focus.0.map(|f| f == absolute_idx).unwrap_or_default();
-
             match chunk {
                 Both(number, string) => {
                     if first_is_number {
-                        self.write_number(out, w_idx, &number, cur_focus, absolute_idx)?;
+                        self.write_number(out, &number, styles, absolute_idx)?;
                         write!(out, "{string}")?;
                     } else {
                         write!(out, "{string}")?;
-                        self.write_number(out, w_idx, &number, cur_focus, absolute_idx)?;
+                        self.write_number(out, &number, styles, absolute_idx)?;
                     }
                 }
                 Left(number) => {
-                    self.write_number(out, w_idx, &number, cur_focus, absolute_idx)?;
+                    self.write_number(out, &number, styles, absolute_idx)?;
                 }
                 Right(string) => {
                     write!(out, "{string}")?;
@@ -263,16 +232,16 @@ impl Dwatch {
     fn write_number(
         &self,
         out: &mut dyn Write,
-        w_idx: usize,
         numbers: &(i64, i64),
-        focus: bool,
+        styles: Styles,
         idx: usize,
     ) -> Result<()> {
-        let style_index = STYLE_MAP
-            .get(&idx)
-            .map(|r| r.load(Ordering::Relaxed))
-            .unwrap_or(w_idx);
-        (WRITERS[style_index % WRITERS.len()].write)(out, numbers, self.interval, focus)
+        (WRITERS[styles.current(idx) % WRITERS.len()].write)(
+            out,
+            numbers,
+            self.interval,
+            styles.is_focus(idx),
+        )
     }
 }
 

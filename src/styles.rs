@@ -1,17 +1,28 @@
 use ansi_term::{Colour, Style};
 use anyhow::Result;
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    fmt::Display,
     fs,
     io::Write,
     path::PathBuf,
-    sync::{atomic::AtomicUsize, LazyLock},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        LazyLock,
+    },
     time::Duration,
 };
 
-pub static STYLE_MAP: LazyLock<DashMap<usize, AtomicUsize>> = LazyLock::new(DashMap::new);
+pub static FOCUS_STYLE_MAP: LazyLock<DashMap<usize, AtomicUsize>> = LazyLock::new(DashMap::new);
+pub static FOCUS_INDEX: Mutex<Option<usize>> = Mutex::new(None);
+pub static GLOBAL_STYLE: AtomicUsize = AtomicUsize::new(0);
+pub static FOCUS_LIFETIME: AtomicUsize = AtomicUsize::new(0);
+pub static TOTAL_FOCUSABLE_ITEMS: AtomicUsize = AtomicUsize::new(0);
+
+const FOCUS_LIFETIME_LIMIT: usize = 5;
 
 pub fn load_style_map(cmd: &[String]) -> Result<()> {
     let key = cmd.join(" ").trim().to_owned();
@@ -38,9 +49,9 @@ pub fn load_style_map(cmd: &[String]) -> Result<()> {
 
     // Load styles for the specific command
     if let Some(styles) = command_styles.get(&key) {
-        STYLE_MAP.clear();
+        FOCUS_STYLE_MAP.clear();
         for (key, value) in styles {
-            STYLE_MAP.insert(*key, AtomicUsize::new(*value));
+            FOCUS_STYLE_MAP.insert(*key, AtomicUsize::new(*value));
         }
     }
 
@@ -70,7 +81,7 @@ pub fn save_style_map(cmd: &[String]) -> Result<()> {
     }
 
     // Update with current STYLE_MAP for this command
-    let current_styles: HashMap<usize, usize> = STYLE_MAP
+    let current_styles: HashMap<usize, usize> = FOCUS_STYLE_MAP
         .iter()
         .map(|entry| {
             (
@@ -108,6 +119,77 @@ fn get_config_path() -> Result<PathBuf> {
     path.push("dwatch");
     path.push("styles.json");
     Ok(path)
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Styles {
+    focus: Focus,
+}
+
+impl Styles {
+    pub fn new() -> Self {
+        Styles {
+            focus: Focus::new(),
+        }
+    }
+
+    pub fn current(&self, index: usize) -> usize {
+        FOCUS_STYLE_MAP
+            .get(&index)
+            .map(|atomic| atomic.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or_else(|| GLOBAL_STYLE.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn focus_or_global(&self) -> usize {
+        let global_style = || GLOBAL_STYLE.load(std::sync::atomic::Ordering::Relaxed);
+        match self.focus.index() {
+            Some(focus_index) => FOCUS_STYLE_MAP
+                .get(&focus_index)
+                .map(|atomic| atomic.load(std::sync::atomic::Ordering::Relaxed))
+                .unwrap_or_else(global_style),
+            None => global_style(),
+        }
+    }
+
+    #[inline]
+    pub fn focus(&self) -> Focus {
+        self.focus
+    }
+
+    #[inline]
+    pub fn is_focus(&self, index: usize) -> bool {
+        self.focus.index().map(|idx| idx == index).unwrap_or(false)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct Focus(Option<usize>);
+
+impl Focus {
+    pub fn new() -> Self {
+        let mut focus = FOCUS_INDEX.lock();
+        let value = *focus;
+        if FOCUS_LIFETIME.fetch_add(1, Ordering::Acquire) > FOCUS_LIFETIME_LIMIT {
+            *focus = None;
+            Focus(None)
+        } else {
+            Focus(value)
+        }
+    }
+
+    pub fn index(&self) -> Option<usize> {
+        self.0
+    }
+}
+
+impl Display for Focus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(value) = self.0 {
+            write!(f, "(focus:{value})")
+        } else {
+            Ok(())
+        }
+    }
 }
 
 type WriterFn =
