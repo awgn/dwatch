@@ -321,30 +321,31 @@ pub fn parse_strings<'a>(line: &'a str, ranges: &[Range<usize>]) -> Vec<&'a str>
 }
 
 pub fn complement_ranges(xs: &[Range<usize>], size: usize) -> Vec<Range<usize>> {
-    let mut compvec = Vec::with_capacity(xs.len() + 1);
+    let mut result = Vec::with_capacity(xs.len() + 1);
     let mut first = 0;
 
     for x in xs {
-        compvec.push(Range {
+        result.push(Range {
             start: first,
             end: x.start,
         });
         first = x.end;
     }
 
-    compvec.push(Range {
+    result.push(Range {
         start: first,
         end: size,
     });
 
-    compvec.retain(|r| r.start != r.end);
-    compvec
+    result
 }
 
 #[inline]
 fn chunks_fingerprint(chunks: &[&str]) -> u64 {
     let mut h = DefaultHasher::new();
-    chunks.iter().for_each(|c| h.write(c.as_bytes()));
+    for chunk in chunks {
+        h.write(chunk.as_bytes());
+    }
     h.finish()
 }
 

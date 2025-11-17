@@ -1,4 +1,4 @@
-use std::{iter::Peekable, ops::Range};
+use std::ops::Range;
 
 #[derive(PartialEq)]
 enum State {
@@ -23,12 +23,9 @@ impl RangeParser {
         let mut ranges = Vec::new();
 
         let mut state = State::Space;
-        let mut point = Range { start: 0, end: 0 };
-        let mut index = 0;
+        let mut point = Range::default();
 
-        let chars: Peekable<std::str::Chars> = str.chars().peekable();
-
-        for c in chars {
+        for (index, c) in str.chars().enumerate() {
             match state {
                 State::None => {
                     if self.heuristic.as_ref()(c) {
@@ -68,11 +65,10 @@ impl RangeParser {
                     }
                 }
             }
-            index += 1;
         }
 
         if state == State::Digit {
-            point.end = index;
+            point.end = str.len();
             ranges.push(point);
         }
 

@@ -1,6 +1,6 @@
 [package]
 name = "dwatch"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2021"
 authors = ["Nicola Bonelli <nicola.bonelli@gmail.com>"]
 description = "DWatch is a modern replacement for the watch Unix tool"
