@@ -327,7 +327,7 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
             v if v > GIGA => format!("{:.2}Gbps", v / GIGA),
             v if v > MEGA => format!("{:.2}Mbps", v / MEGA),
             v if v > KILO => format!("{:.2}Kbps", v / KILO),
-            v => format!("{v:.2}bps"),
+            v => format!("{v:.2}_bps"),
         }
     } else {
         match value {

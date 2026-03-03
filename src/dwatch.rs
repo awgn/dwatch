@@ -1,6 +1,5 @@
 use rustc_hash::FxHasher;
 use std::{
-    cell::RefCell,
     hash::Hasher,
     io::Write,
     ops::Range,
@@ -52,7 +51,7 @@ pub struct Dwatch {
     /// Parser for extracting numeric ranges from text
     range_parser: RangeParser,
     /// Maps line identifiers to their numeric statistics
-    line_map: RefCell<LineMap>,
+    line_map: LineMap,
     /// Interval between consecutive runs
     interval: Duration,
 }
@@ -63,12 +62,12 @@ impl Dwatch {
             range_parser: RangeParser::new(|c| {
                 c.is_ascii_whitespace() || ".,:;()[]{}<>'`\"|=".contains(c)
             }),
-            line_map: RefCell::new(LineMap::new()),
+            line_map: LineMap::new(),
             interval,
         }
     }
 
-    pub fn run(self, opt: Options) -> Result<()> {
+    pub fn run(mut self, opt: Options) -> Result<()> {
         let opt = Arc::new(opt);
         let mutex = parking_lot::Mutex::new(());
 
@@ -104,12 +103,13 @@ impl Dwatch {
             }
 
             let (mut line_no, mut num_no): (usize, usize) = (0, 0);
+            let interval = self.interval;
 
             for cmd in &opt.commands {
                 let opt = Arc::clone(&opt);
                 let cmd = cmd.clone();
                 thread_handles.push(std::thread::spawn(move || {
-                    run_command(&cmd, opt, self.interval).unwrap_or_else(|e| format!("{e}"))
+                    run_command(&cmd, opt, interval).unwrap_or_else(|e| format!("{e}"))
                 }));
             }
 
@@ -147,7 +147,7 @@ impl Dwatch {
     }
 
     fn writeln_line(
-        &self,
+        &mut self,
         out: &mut dyn Write,
         line: (&str, usize, usize),
         styles: Styles,
@@ -157,32 +157,29 @@ impl Dwatch {
         let numbers = parse_numbers(line.0, &ranges)?;
         let key = (line.1, chunks_fingerprint(&strings));
 
-        let mut line_map = self.line_map.borrow_mut();
-
-        let line_stat = line_map
-            .entry(key)
-            .or_insert(LineNumbers::new(numbers.clone()));
-
         let total_numbers_in_line = numbers.len();
 
-        let line_stat = {
-            if total_numbers_in_line == line_stat.values.len() {
-                let mut deltas = Vec::with_capacity(numbers.len());
+        self.line_map
+            .entry(key)
+            .or_insert_with(|| LineNumbers::new(numbers.clone()));
 
-                for (a, b) in numbers.iter().zip(line_stat.values.iter()) {
-                    deltas.push(a - b);
-                }
-                line_stat.values = numbers.clone();
-                line_stat.delta = deltas;
-                line_stat
-            } else {
-                line_stat.values = numbers.clone();
-                line_stat.delta = vec![0; numbers.len()];
-                line_stat
+        let line_stat = self.line_map.get_mut(&key).unwrap();
+
+        if total_numbers_in_line == line_stat.values.len() {
+            let mut deltas = Vec::with_capacity(numbers.len());
+
+            for (a, b) in numbers.iter().zip(line_stat.values.iter()) {
+                deltas.push(a - b);
             }
+            line_stat.values = numbers.clone();
+            line_stat.delta = deltas;
+        } else {
+            line_stat.values = numbers.clone();
+            line_stat.delta = vec![0; numbers.len()];
         };
 
-        self.writeln_data(out, &strings, line_stat, &ranges, styles, line.2)?;
+        let line_stat_copy = line_stat.clone();
+        self.writeln_data(out, &strings, &line_stat_copy, &ranges, styles, line.2)?;
         Ok(total_numbers_in_line)
     }
 
@@ -325,17 +322,21 @@ pub fn complement_ranges(xs: &[Range<usize>], size: usize) -> Vec<Range<usize>> 
     let mut first = 0;
 
     for x in xs {
-        result.push(Range {
-            start: first,
-            end: x.start,
-        });
+        if first < x.start {
+            result.push(Range {
+                start: first,
+                end: x.start,
+            });
+        }
         first = x.end;
     }
 
-    result.push(Range {
-        start: first,
-        end: size,
-    });
+    if first < size {
+        result.push(Range {
+            start: first,
+            end: size,
+        });
+    }
 
     result
 }
