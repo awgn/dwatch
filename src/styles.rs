@@ -1,4 +1,4 @@
-use ansi_term::{Colour, Style};
+use owo_colors::OwoColorize;
 use anyhow::Result;
 use dashmap::DashMap;
 use parking_lot::Mutex;
@@ -221,18 +221,16 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
         WriterBox::new(
             "default",
             |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
-                let style = build_style(Colour::Blue, focus);
-                write!(out, "{}", style.paint(format!("{}", num.0)))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), "blue", focus))?;
                 Ok(())
             },
         ),
         WriterBox::new(
             "number+(events per interval)",
             |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
-                let style = build_style(Colour::Red, focus);
-                write!(out, "{}", style.paint(format!("{}", num.0)))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), "red", focus))?;
                 if num.1 != 0 {
-                    write!(out, "⟶{}/i", style.paint(format!("{}", num.1)))?;
+                    write!(out, "⟶{}/i", apply_style(format!("{}", num.1), "red", focus))?;
                 }
                 Ok(())
             },
@@ -244,11 +242,10 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
              interval: Duration,
              focus: bool|
              -> Result<()> {
-                let style = build_style(Colour::Red, focus);
-                write!(out, "{}", style.paint(format!("{}", num.0)))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), "red", focus))?;
                 if num.1 != 0 {
                     let rate = num.1 as f64 / interval.as_secs_f64();
-                    write!(out, "⟶{}/s", style.paint(format!("{rate}")))?;
+                    write!(out, "⟶{}/s", apply_style(format!("{rate}"), "red", focus))?;
                 }
                 Ok(())
             },
@@ -256,8 +253,7 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
         WriterBox::new(
             "events per interval",
             |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
-                let style = build_style(Colour::Red, focus);
-                write!(out, "{}/i", style.paint(format!("{}", num.1)))?;
+                write!(out, "{}/i", apply_style(format!("{}", num.1), "red", focus))?;
                 Ok(())
             },
         ),
@@ -268,9 +264,8 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
              interval: Duration,
              focus: bool|
              -> Result<()> {
-                let style = build_style(Colour::Red, focus);
                 let rate = num.1 as f64 / interval.as_secs_f64();
-                write!(out, "{}/s", style.paint(format!("{rate}")))?;
+                write!(out, "{}/s", apply_style(format!("{rate}"), "red", focus))?;
                 Ok(())
             },
         ),
@@ -281,14 +276,13 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
              interval: Duration,
              focus: bool|
              -> Result<()> {
-                let style = build_style(Colour::Purple, focus);
-                write!(out, "{}", style.paint(format!("{}", num.0)))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), "purple", focus))?;
                 if num.1 != 0 {
                     let rate = num.1 as f64 / interval.as_secs_f64();
                     write!(
                         out,
                         "⟶{}/s",
-                        style.paint(format_number(rate, false).to_string())
+                        apply_style(format_number(rate, false).to_string(), "purple", focus)
                     )?;
                 }
                 Ok(())
@@ -301,14 +295,13 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
              interval: Duration,
              focus: bool|
              -> Result<()> {
-                let style = build_style(Colour::Green, focus);
-                write!(out, "{}", style.paint(format!("{}", num.0)))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), "green", focus))?;
                 if num.1 != 0 {
                     let bit_rate = (num.1 * 8) as f64 / interval.as_secs_f64();
                     write!(
                         out,
                         "⟶{}/s",
-                        style.paint(format_number(bit_rate, true).to_string())
+                        apply_style(format_number(bit_rate, true).to_string(), "green", focus)
                     )?;
                 }
                 Ok(())
@@ -334,7 +327,7 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
             v if v > GIGA => format!("{:.2}Gbps", v / GIGA),
             v if v > MEGA => format!("{:.2}Mbps", v / MEGA),
             v if v > KILO => format!("{:.2}Kbps", v / KILO),
-            v => format!("{v:.2}_bps"),
+            v => format!("{v:.2}bps"),
         }
     } else {
         match value {
@@ -347,11 +340,21 @@ fn format_number<T: Into<f64>>(v: T, bit: bool) -> String {
 }
 
 #[inline]
-fn build_style(c: Colour, focus: bool) -> Style {
+fn apply_style(text: String, color: &str, focus: bool) -> String {
+    let colored = match color {
+        "blue" => text.blue().to_string(),
+        "red" => text.red().to_string(),
+        "purple" => text.magenta().to_string(),
+        "green" => text.green().to_string(),
+        _ => text.blue().to_string(),
+    };
+    
+    let bold_text = colored.bold().to_string();
+    
     if focus {
-        c.bold().reverse()
+        bold_text.reversed().to_string()
     } else {
-        c.bold()
+        bold_text
     }
 }
 

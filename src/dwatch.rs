@@ -1,6 +1,6 @@
+use rustc_hash::FxHasher;
 use std::{
     cell::RefCell,
-    collections::hash_map::DefaultHasher,
     hash::Hasher,
     io::Write,
     ops::Range,
@@ -342,7 +342,7 @@ pub fn complement_ranges(xs: &[Range<usize>], size: usize) -> Vec<Range<usize>> 
 
 #[inline]
 fn chunks_fingerprint(chunks: &[&str]) -> u64 {
-    let mut h = DefaultHasher::new();
+    let mut h = FxHasher::default();
     for chunk in chunks {
         h.write(chunk.as_bytes());
     }

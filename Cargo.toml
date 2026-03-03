@@ -13,12 +13,13 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 ansi-escapes = "0.1.1"
-ansi_term = "0.12.1"
-anyhow = "1.0.100"
-clap = { version = "4.5.54", features = ["derive"] }
+owo-colors = "4.1.0"
+anyhow = "1.0.102"
+clap = { version = "4.5.60", features = ["derive"] }
 dashmap = { version = "6.1.0", features = ["serde"] }
 itertools = "0.11.0"
 parking_lot = "0.12.5"
+rustc-hash = "2.1.1"
 serde = "1.0.228"
 serde_json = "1.0.149"
 signal-hook = "0.3.18"
