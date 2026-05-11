@@ -193,26 +193,32 @@ impl Display for Focus {
 }
 
 type WriterFn =
-    dyn Fn(&mut dyn Write, &(i64, i64), Duration, bool) -> Result<()> + Send + Sync + 'static;
+    dyn Fn(&mut dyn Write, &(i64, i64), Duration, bool, &'static str) -> Result<()> + Send + Sync + 'static;
 
 pub struct WriterBox {
     pub write: Box<WriterFn>,
     pub style: String,
+    pub color: &'static str,
 }
 
 impl WriterBox {
-    pub fn new<F>(style: &str, fun: F) -> Self
+    pub fn new<F>(style: &str, color: &'static str, fun: F) -> Self
     where
-        F: Fn(&mut dyn Write, &(i64, i64), Duration, bool) -> Result<()> + Send + Sync + 'static,
+        F: Fn(&mut dyn Write, &(i64, i64), Duration, bool, &'static str) -> Result<()> + Send + Sync + 'static,
     {
         Self {
             write: Box::new(fun),
             style: style.to_owned(),
+            color,
         }
     }
 
     pub fn index(s: &str) -> Option<usize> {
         WRITERS.iter().position(|w| w.style == s)
+    }
+
+    pub fn styled_name(&self, focus: bool) -> String {
+        apply_style(self.style.clone(), self.color, focus)
     }
 }
 
@@ -220,69 +226,84 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
     vec![
         WriterBox::new(
             "default",
-            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
-                write!(out, "{}", apply_style(format!("{}", num.0), "blue", focus))?;
+            "blue",
+            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool, color: &'static str| -> Result<()> {
+                write!(out, "{}", apply_style(format!("{}", num.0), color, focus))?;
                 Ok(())
             },
         ),
         WriterBox::new(
             "number+(events per interval)",
-            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
-                write!(out, "{}", apply_style(format!("{}", num.0), "red", focus))?;
+            "red",
+            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool, color: &'static str| -> Result<()> {
+                write!(out, "{}", apply_style(format!("{}", num.0), color, focus))?;
                 if num.1 != 0 {
-                    write!(out, "⟶{}/i", apply_style(format!("{}", num.1), "red", focus))?;
+                    let arrow = if num.1 > 0 { "↗" } else { "↘" };
+                    write!(out, " {}", apply_style(format!("{} {:+}/i", arrow, num.1), color, focus))?;
                 }
                 Ok(())
             },
         ),
         WriterBox::new(
             "number+(events per second)",
+            "red",
             |out: &mut dyn Write,
              num: &(i64, i64),
              interval: Duration,
-             focus: bool|
+             focus: bool,
+             color: &'static str|
              -> Result<()> {
-                write!(out, "{}", apply_style(format!("{}", num.0), "red", focus))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), color, focus))?;
                 if num.1 != 0 {
                     let rate = num.1 as f64 / interval.as_secs_f64();
-                    write!(out, "⟶{}/s", apply_style(format!("{rate}"), "red", focus))?;
+                    let arrow = if num.1 > 0 { "↗" } else { "↘" };
+                    write!(out, " {}", apply_style(format!("{} {:+}/s", arrow, rate), color, focus))?;
                 }
                 Ok(())
             },
         ),
         WriterBox::new(
             "events per interval",
-            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool| -> Result<()> {
-                write!(out, "{}/i", apply_style(format!("{}", num.1), "red", focus))?;
+            "red",
+            |out: &mut dyn Write, num: &(i64, i64), _: Duration, focus: bool, color: &'static str| -> Result<()> {
+                let arrow = if num.1 > 0 { "↗" } else if num.1 < 0 { "↘" } else { "→" };
+                write!(out, "{}", apply_style(format!("{} {:+}/i", arrow, num.1), color, focus))?;
                 Ok(())
             },
         ),
         WriterBox::new(
             "events per second",
+            "red",
             |out: &mut dyn Write,
              num: &(i64, i64),
              interval: Duration,
-             focus: bool|
+             focus: bool,
+             color: &'static str|
              -> Result<()> {
                 let rate = num.1 as f64 / interval.as_secs_f64();
-                write!(out, "{}/s", apply_style(format!("{rate}"), "red", focus))?;
+                let arrow = if num.1 > 0 { "↗" } else if num.1 < 0 { "↘" } else { "→" };
+                write!(out, "{}", apply_style(format!("{} {:+}/s", arrow, rate), color, focus))?;
                 Ok(())
             },
         ),
         WriterBox::new(
             "engineering",
+            "purple",
             |out: &mut dyn Write,
              num: &(i64, i64),
              interval: Duration,
-             focus: bool|
+             focus: bool,
+             color: &'static str|
              -> Result<()> {
-                write!(out, "{}", apply_style(format!("{}", num.0), "purple", focus))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), color, focus))?;
                 if num.1 != 0 {
                     let rate = num.1 as f64 / interval.as_secs_f64();
+                    let arrow = if num.1 > 0 { "↗" } else { "↘" };
+                    let sign = if num.1 > 0 { "+" } else { "-" };
                     write!(
                         out,
-                        "⟶{}/s",
-                        apply_style(format_number(rate, false).to_string(), "purple", focus)
+                        " {}",
+                        apply_style(format!("{} {}{}/s", arrow, sign, format_number(rate.abs(), false)), color, focus)
                     )?;
                 }
                 Ok(())
@@ -290,18 +311,22 @@ pub static WRITERS: LazyLock<Vec<WriterBox>> = LazyLock::new(|| {
         ),
         WriterBox::new(
             "networking",
+            "green",
             |out: &mut dyn Write,
              num: &(i64, i64),
              interval: Duration,
-             focus: bool|
+             focus: bool,
+             color: &'static str|
              -> Result<()> {
-                write!(out, "{}", apply_style(format!("{}", num.0), "green", focus))?;
+                write!(out, "{}", apply_style(format!("{}", num.0), color, focus))?;
                 if num.1 != 0 {
                     let bit_rate = (num.1 * 8) as f64 / interval.as_secs_f64();
+                    let arrow = if num.1 > 0 { "↗" } else { "↘" };
+                    let sign = if num.1 > 0 { "+" } else { "-" };
                     write!(
                         out,
-                        "⟶{}/s",
-                        apply_style(format_number(bit_rate, true).to_string(), "green", focus)
+                        " {}",
+                        apply_style(format!("{} {}{}", arrow, sign, format_number(bit_rate.abs(), true)), color, focus)
                     )?;
                 }
                 Ok(())

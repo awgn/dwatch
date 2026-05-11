@@ -22,6 +22,7 @@ use crate::{
 use crate::{ranges::RangeParser, styles::WRITERS};
 use crate::{TERM, WAIT};
 use wait_timeout::ChildExt;
+use std::os::unix::process::CommandExt;
 
 const AVERAGE_SECONDS_IN_YEAR: u64 = 31_556_952;
 
@@ -68,6 +69,20 @@ impl Dwatch {
     }
 
     pub fn run(mut self, opt: Options) -> Result<()> {
+        struct CursorGuard;
+        impl CursorGuard {
+            fn new() -> Self {
+                print!("{}", ansi_escapes::CursorHide);
+                Self
+            }
+        }
+        impl Drop for CursorGuard {
+            fn drop(&mut self) {
+                print!("{}", ansi_escapes::CursorShow);
+            }
+        }
+
+        let _cursor_guard = CursorGuard::new();
         let opt = Arc::new(opt);
         let mutex = parking_lot::Mutex::new(());
 
@@ -82,52 +97,80 @@ impl Dwatch {
         // Pre-allocate thread handles vector
         let mut thread_handles: Vec<JoinHandle<_>> = Vec::with_capacity(opt.commands.len());
 
+        let mut first_run = true;
+        let mut stdout = std::io::stdout();
+        let mut tick: u64 = 0;
+
         while Instant::now() < end {
+            tick += 1;
             let styles = Styles::new();
+            let mut out_buf = Vec::new();
 
-            print!(
-                "{}{}",
-                ansi_escapes::ClearScreen,
-                ansi_escapes::CursorTo::TopLeft
-            );
-
-            if !opt.no_banner {
-                println!(
-                    "Every {} ms, style '{}': {}{} {}\n",
-                    self.interval.as_millis(),
-                    WRITERS[styles.focus_or_global() % WRITERS.len()].style,
-                    opt.commands.join(" | "),
-                    ansi_escapes::EraseEndLine,
-                    styles.focus()
-                );
+            if first_run {
+                write!(
+                    out_buf,
+                    "{}{}",
+                    ansi_escapes::ClearScreen,
+                    ansi_escapes::CursorTo::TopLeft
+                )?;
+                first_run = false;
+            } else {
+                write!(out_buf, "{}", ansi_escapes::CursorTo::TopLeft)?;
             }
 
-            let (mut line_no, mut num_no): (usize, usize) = (0, 0);
+            if !opt.no_banner {
+                writeln!(
+                    out_buf,
+                    "[{}] Every {} ms, style {}: {} {}{}",
+                    tick,
+                    self.interval.as_millis(),
+                    WRITERS[styles.focus_or_global() % WRITERS.len()].styled_name(styles.focus().index().is_some()),
+                    opt.commands.join(" | "),
+                    styles.focus(),
+                    ansi_escapes::EraseEndLine
+                )?;
+                writeln!(out_buf, "{}", ansi_escapes::EraseEndLine)?;
+            }
+
+            let mut num_no: usize = 0;
             let interval = self.interval;
 
-            for cmd in &opt.commands {
+            for (cmd_idx, cmd) in opt.commands.iter().enumerate() {
                 let opt = Arc::clone(&opt);
                 let cmd = cmd.clone();
                 thread_handles.push(std::thread::spawn(move || {
-                    run_command(&cmd, opt, interval).unwrap_or_else(|e| format!("{e}"))
+                    let result = run_command(&cmd, opt, interval).unwrap_or_else(|e| format!("{e}"));
+                    (cmd_idx, result)
                 }));
             }
 
+            // We must order the outputs exactly as the commands were passed
+            // The threads can finish in any order.
+            let mut outputs: Vec<Option<String>> = vec![None; opt.commands.len()];
+            
             for th in thread_handles.drain(..) {
-                let output = th
+                let (cmd_idx, output) = th
                     .join()
                     .map_err(|e| -> anyhow::Error { anyhow!("Thread Join error: {:?}", e) })?;
+                outputs[cmd_idx] = Some(output);
+            }
 
-                // transform and print the output, line by line
-                for line in output.lines() {
+            for (cmd_idx, output) in outputs.into_iter().enumerate() {
+                let output = output.unwrap();
+                // If there's more than one command, we might want to print a separator between them in the future.
+                // For now, just print the lines. We use a global line identifier combining cmd_idx and local_line_no 
+                // to ensure unique line keys across multiple command outputs.
+                for (local_line_no, line) in output.lines().enumerate() {
+                    // Create a unique line identifier combining command index and its local line number
+                    let global_line_id = (cmd_idx << 32) | (local_line_no as usize);
                     num_no +=
-                        self.writeln_line(&mut std::io::stdout(), (line, line_no, num_no), styles)?;
-                    line_no += 1;
+                        self.writeln_line(&mut out_buf, (line, global_line_id, num_no), styles)?;
                 }
             }
 
-            write!(&mut std::io::stdout(), "{}", ansi_escapes::EraseDown)?;
-            std::io::stdout().flush()?;
+            write!(&mut out_buf, "{}", ansi_escapes::EraseDown)?;
+            stdout.write_all(&out_buf)?;
+            stdout.flush()?;
 
             TOTAL_FOCUSABLE_ITEMS.store(num_no, Ordering::Relaxed);
 
@@ -233,22 +276,27 @@ impl Dwatch {
         styles: Styles,
         idx: usize,
     ) -> Result<()> {
-        (WRITERS[styles.current(idx) % WRITERS.len()].write)(
+        let writer = &WRITERS[styles.current(idx) % WRITERS.len()];
+        (writer.write)(
             out,
             numbers,
             self.interval,
             styles.is_focus(idx),
+            writer.color,
         )
     }
 }
 
 fn run_command(cmd: &str, _opt: Arc<Options>, timeout: Duration) -> Result<String> {
-    // Spawn the child process, but keep it mutable to kill it later if needed
+    // Spawn the child process in its own process group (process_group(0)).
+    // This prevents terminal signals like SIGTSTP (Ctrl+Z) or SIGQUIT (Ctrl+\) 
+    // from suspending or killing the child process, allowing dwatch to handle them instantly.
     let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg(cmd)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|e| anyhow!("Failed to spawn command '{}': {}", cmd, e))?;
 
